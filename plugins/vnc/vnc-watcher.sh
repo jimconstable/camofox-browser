@@ -45,12 +45,24 @@ websockify --web "$NOVNC_DIR" "$VNC_BIND:$NOVNC_PORT" "127.0.0.1:$VNC_PORT" >/va
 log "VNC watcher started -- will attach x11vnc when Camoufox's Xvfb appears"
 
 while true; do
-  # Find Xvfb with our patched resolution
-  FOUND=$(ps -eo args= 2>/dev/null | awk -v res="$VNC_RESOLUTION" '
-    /\/Xvfb :[0-9]+/ && index($0, res) {
-      for (i=1;i<=NF;i++) if ($i ~ /^:[0-9]+$/) { print $i; exit }
-    }
-  ' | head -1)
+  # Find the active Xvfb display via its unix socket. Modern Camoufox launches
+  # Xvfb with `-displayfd 3` (kernel-assigned display number), so there is no
+  # literal ":N" token in the process command line to grep for -- we have to
+  # look at /tmp/.X11-unix/X<N> instead, and only trust it while an Xvfb
+  # process matching our patched resolution is actually running.
+  if pgrep -f "Xvfb .*$VNC_RESOLUTION" >/dev/null 2>&1; then
+    FOUND=$(ls /tmp/.X11-unix/ 2>/dev/null | sed -n 's/^X\([0-9]\+\)$/:\1/p' | sort -t: -k2 -n | tail -1)
+  else
+    FOUND=""
+  fi
+
+  # If x11vnc died (e.g. XIO error when Xvfb was restarted under it, even on
+  # the same display number), clear state so we re-attach below.
+  if [ -n "$X11VNC_PID" ] && ! kill -0 "$X11VNC_PID" 2>/dev/null; then
+    log "x11vnc (pid=$X11VNC_PID) is gone, will re-attach"
+    X11VNC_PID=""
+    CURRENT_DISPLAY=""
+  fi
 
   if [ -n "$FOUND" ] && [ "$FOUND" != "$CURRENT_DISPLAY" ]; then
     # New or changed display -- (re)attach x11vnc
