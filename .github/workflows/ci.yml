@@ -1,90 +1,247 @@
 name: CI
 
+# Pull-request and manual validation only. This workflow never publishes,
+# never writes packages, and uses no repository secrets. It runs exclusively
+# on GitHub-hosted ubuntu runners.
 on:
-  push:
-    branches: [master]
   pull_request:
-    branches: [master]
+  workflow_dispatch:
+
+# No secrets, no registry writes. Read-only checkout is all that is needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  unit:
+  # ---------------------------------------------------------------------------
+  # Lint / syntax / OpenAPI freshness / browser-independent unit tests.
+  # ---------------------------------------------------------------------------
+  verify:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [24]
+    env:
+      CI: true
+      # Deterministic install: do not pull the Camoufox binary. The tests in
+      # this job are browser-independent, and the download is large + network
+      # dependent (kept out of PR CI for reproducibility).
+      CAMOFOX_SKIP_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22
           cache: npm
 
-      - name: Install dependencies
+      - name: Install dependencies (locked)
         run: npm ci
 
       - name: Build plugin (TypeScript → JS)
         run: npm run build
 
-      - name: Run unit + plugin tests (Jest)
+      - name: Syntax check
         run: |
-          npm install --no-save jest-junit
-          node --experimental-vm-modules node_modules/.bin/jest \
-            --testPathPattern='tests/unit|plugins' \
-            --testPathIgnorePatterns='security\.test|tabRecycling\.test|cookies\.test' \
-            --forceExit
-        env:
-          CI: true
+          for f in server.js plugin.js scripts/*.js; do
+            node --check "$f"
+          done
 
-  e2e:
+      - name: OpenAPI spec is fresh
+        run: |
+          npm run generate-openapi
+          git diff --exit-code openapi.json \
+            || { echo "::error::openapi.json is stale — run 'npm run generate-openapi' and commit."; exit 1; }
+
+      - name: Browser-independent unit + plugin tests
+        run: |
+          node --experimental-vm-modules node_modules/.bin/jest \
+            --testPathPattern='tests/unit|plugins|scripts' \
+            --testPathIgnorePatterns='security\.test|tabRecycling\.test|cookies\.test|tabLifecycleContract\.test' \
+            --forceExit
+
+      # Browser-backed contract and E2E tests run in the browser-tests job below,
+      # which provisions Camoufox and runs tests that require a real browser.
+
+  # ---------------------------------------------------------------------------
+  # Browser-backed contract tests and E2E suite.
+  #
+  # Provisions Camoufox via scripts/postinstall.js → npx camoufox-js fetch,
+  # using the exact camoufox-js release pinned in package-lock.json. The
+  # binary is cached under ~/.cache/camoufox keyed on runner OS + lock-file
+  # hash; on a cache hit postinstall.js detects version.json and skips the
+  # download entirely.
+  #
+  # Test coverage (no overlap with the verify job above):
+  #   browser-unit  tests/unit/{security,cookies,tabRecycling,tabLifecycleContract}
+  #   e2e           tests/e2e/* (server lifecycle via jest.config.e2e.cjs globalSetup)
+  # ---------------------------------------------------------------------------
+  browser-tests:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [24]
+    env:
+      CI: true
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22
           cache: npm
 
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm install --no-save jest-junit
-
-      - name: Cache Playwright browsers
-        id: playwright-cache
+      # Restore the Camoufox binary before npm ci so postinstall.js sees
+      # version.json and skips the download on a cache hit. Key is strictly
+      # OS + lock-file hash — no restore-keys fallback, preventing a stale
+      # binary (wrong camoufox-js version) from being silently reused.
+      - name: Restore Camoufox binary cache
+        id: camoufox-cache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          path: ~/.cache/camoufox
+          key: camoufox-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
 
-      - name: Install browser
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps firefox
-
-      - name: Install browser system deps (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps firefox
-
-      - name: Run e2e + browser-dependent unit tests
+      # Install Firefox/Camoufox system libraries.
+      # Ubuntu 24.04 renamed several libraries with a t64 suffix; probe for the
+      # new name first and fall back to the Ubuntu 22.04 names.
+      - name: Install Camoufox (Firefox) runtime libraries
         run: |
-          xvfb-run --auto-servernum \
-            node --experimental-vm-modules node_modules/.bin/jest \
-              --config jest.config.e2e.cjs \
-              --runInBand --forceExit
-        env:
-          CI: true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates \
+            fontconfig \
+            fonts-liberation \
+            fonts-noto-color-emoji \
+            libdbus-glib-1-2 \
+            libegl1 \
+            libgbm1 \
+            libgl1-mesa-dri \
+            libx11-xcb1 \
+            libxcomposite1 \
+            libxcursor1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxi6 \
+            libxrandr2 \
+            libxrender1 \
+            libxtst6 \
+            xvfb
+          # Ubuntu 24.04+ uses t64 ABI-transition names for these three.
+          if apt-cache show libgtk-3-0t64 > /dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends \
+              libgtk-3-0t64 libasound2t64 libxt6t64
+          else
+            sudo apt-get install -y --no-install-recommends \
+              libgtk-3-0 libasound2 libxt6
+          fi
+          # libxss1 is absent from some Ubuntu 24.04 runner images.
+          if apt-cache show libxss1 > /dev/null 2>&1; then
+            sudo apt-get install -y --no-install-recommends libxss1
+          fi
 
-      - name: Run browser-dependent unit tests
-        run: |
-          xvfb-run --auto-servernum \
-            node --experimental-vm-modules node_modules/.bin/jest \
-              --testPathPattern='tests/unit/(security|tabRecycling|cookies)\.test' \
-              --runInBand --forceExit
+      # Keep the token out of arbitrary dependency lifecycle scripts. The
+      # dependency install deliberately skips the project's browser download;
+      # the following fetch step is the only process that receives the token.
+      - name: Install dependencies (locked)
         env:
-          CI: true
+          CAMOFOX_SKIP_DOWNLOAD: '1'
+        run: npm ci
+
+      # Fetch through the project's supported pinned camoufox-js dependency.
+      # A token avoids unauthenticated GitHub API rate-limit failures.
+      - name: Fetch Camoufox binary
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npx camoufox-js fetch
+
+      - name: Assert Camoufox binary is present
+        run: |
+          set -euo pipefail
+          test -f "${HOME}/.cache/camoufox/version.json" \
+            || { echo "::error::~/.cache/camoufox/version.json not found — Camoufox binary did not provision"; exit 1; }
+          echo "Camoufox provisioned:"
+          cat "${HOME}/.cache/camoufox/version.json"
+
+      # Browser-backed unit/contract tests. Each file manages its own server
+      # lifecycle (beforeAll/afterAll), so --runInBand is required to prevent
+      # concurrent browser instances on the same runner.
+      # These four tests are excluded from the verify job above.
+      - name: Browser-backed unit tests
+        run: |
+          node --experimental-vm-modules node_modules/.bin/jest \
+            --testPathPattern='tests/unit/(security|cookies|tabRecycling|tabLifecycleContract)\.test' \
+            --runInBand \
+            --forceExit
+
+      # E2E suite uses jest.config.e2e.cjs which wires up globalSetup/
+      # globalTeardown to start a single shared server for all e2e files.
+      # testMatch in that config covers only tests/e2e/*.test.js — no overlap
+      # with the browser-unit step above.
+      - name: E2E tests
+        run: |
+          node --experimental-vm-modules node_modules/.bin/jest \
+            --config jest.config.e2e.cjs \
+            --runInBand \
+            --forceExit
+
+  # ---------------------------------------------------------------------------
+  # Reproducible authenticated-download E2E for the pinned yt-dlp binary.
+  #
+  # yt-dlp CAN be acquired reproducibly (pinned release tag + upstream-published
+  # SHA2-256SUMS), so this job exercises the real download + integrity-verify
+  # path and asserts the binary reports the pinned version.
+  #
+  # LIMITATION: a live "download a YouTube video/transcript" E2E is intentionally
+  # NOT run here. It depends on external network to YouTube, is rate-limited,
+  # non-deterministic, and can require host/session state — none of which is
+  # reproducible in PR CI. The integrity + version assertion below is the
+  # reproducible subset of that flow.
+  # ---------------------------------------------------------------------------
+  ytdlp-download:
+    runs-on: ubuntu-latest
+    env:
+      YTDLP_VERSION: '2026.07.04'
+      YTDLP_SHA256_X86_64: '6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae'
+    steps:
+      - name: Download pinned yt-dlp and verify integrity
+        run: |
+          set -euxo pipefail
+          curl -fSL \
+            "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux" \
+            -o yt-dlp
+          echo "${YTDLP_SHA256_X86_64}  yt-dlp" | sha256sum -c -
+          chmod 755 yt-dlp
+
+      - name: Assert binary reports the pinned version
+        run: |
+          set -euxo pipefail
+          REPORTED="$(./yt-dlp --version)"
+          echo "yt-dlp reports: ${REPORTED}"
+          test "${REPORTED}" = "${YTDLP_VERSION}" \
+            || { echo "::error::yt-dlp version mismatch: ${REPORTED} != ${YTDLP_VERSION}"; exit 1; }
+
+  # ---------------------------------------------------------------------------
+  # Clean production image build. Never pushes (push: false). Uses BuildKit
+  # GHA cache to speed up repeat runs; cache is scoped to Actions, not a
+  # registry, so no credentials are required.
+  # ---------------------------------------------------------------------------
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.ci
+          platforms: linux/amd64
+          push: false
+          load: false
+          build-args: |
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            IMAGE_REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

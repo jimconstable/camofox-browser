@@ -179,6 +179,72 @@ Set secrets via the Railway dashboard or CLI:
 railway variables set CAMOFOX_API_KEY="your-generated-key"
 ```
 
+### Container images (GHCR)
+
+Production images are published to GitHub Container Registry by the
+`publish-image.yml` workflow, which runs only on pushes to `master` and manual
+dispatch. Every publish produces:
+
+- an **immutable, content-addressable tag** `ghcr.io/jimconstable/camofox-browser:sha-<commit>`, and
+- a **readable version tag** `ghcr.io/jimconstable/camofox-browser:v<package.json version>`.
+
+There is intentionally **no mutable `latest` tag**. Deployments must pin to the
+`sha-<commit>` tag or the image `@sha256:<digest>` (both printed in the workflow
+run summary) so a deploy target can never silently change under you.
+
+Pull an image by immutable reference:
+
+```bash
+docker pull ghcr.io/jimconstable/camofox-browser:sha-<commit>
+# or by digest
+docker pull ghcr.io/jimconstable/camofox-browser@sha256:<digest>
+```
+
+> **One-time setup (repo admin, GitHub UI):** the first published package is
+> **private** by default. To make images publicly pullable, a maintainer must
+> set the package visibility to **Public** once, via
+> *GitHub → repo → Packages → camofox-browser → Package settings → Change
+> visibility → Public*. This is a manual UI action that cannot be performed by
+> the workflow and only needs to be done once.
+
+### Deterministic build inputs
+
+Container builds are reproducible: all external build inputs are pinned.
+
+| Input | Pinned in | Value |
+| --- | --- | --- |
+| Node base image | `Dockerfile`, `Dockerfile.ci` | `node:22-slim@sha256:6c74791e…` (immutable multi-arch index digest) |
+| Camoufox | `Dockerfile*`, `Makefile` | `135.0.1` / `beta.24` |
+| Playwright | `package-lock.json` | `playwright-core` `1.58.1` |
+| yt-dlp | `Dockerfile*`, `Makefile`, `ci.yml` | release `2026.07.04`, integrity-verified against the upstream `SHA2-256SUMS` |
+
+Dependency installs in the image use a locked production install
+(`npm ci --omit=dev`) against the committed `package-lock.json`.
+
+**Refreshing deterministic build inputs:**
+
+- **yt-dlp** — pick a tag from
+  [yt-dlp releases](https://github.com/yt-dlp/yt-dlp/releases), then copy the
+  matching checksums from that release's `SHA2-256SUMS` asset (never invent
+  them):
+
+  ```bash
+  curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/<TAG>/SHA2-256SUMS \
+    | grep -E 'yt-dlp_linux(_aarch64)?$'
+  ```
+
+  Update `YTDLP_VERSION` and the `YTDLP_SHA256*` values in `Makefile`,
+  `Dockerfile`, `Dockerfile.ci`, and the `ytdlp-download` job in
+  `.github/workflows/ci.yml`. The `yt-dlp_linux` checksum is x86_64;
+  `yt-dlp_linux_aarch64` is arm64.
+
+- **Node base image** — resolve a fresh immutable digest and update the
+  `FROM node:22-slim@sha256:…` lines in both Dockerfiles:
+
+  ```bash
+  docker buildx imagetools inspect node:22-slim
+  ```
+
 ## Usage
 
 ### Cookie Import

@@ -56,18 +56,23 @@ $CamoufoxZip = Join-Path $DistDir "camoufox-$Arch.zip"
 $YtDlpBin = Join-Path $DistDir "yt-dlp-$Arch"
 $ImageTag = "camofox-browser:$CamoufoxVersion-$Arch"
 $ContainerPort = 9377
+$YtDlpVersion = '2026.07.04'
+$YtDlpSha256X86_64 = '6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae'
+$YtDlpSha256Aarch64 = 'b6ce97646773070d7a7ffd6bbbdcaecb47c48483909c54c915bf08a7a9b5e0b1'
 
 # Map architecture to upstream release filenames
 if ($Arch -eq 'aarch64') {
     $CamoufoxArch = 'arm64'
     $YtDlpSuffix = '_aarch64'
+    $YtDlpSha256 = $YtDlpSha256Aarch64
 } else {
     $CamoufoxArch = 'x86_64'
     $YtDlpSuffix = ''
+    $YtDlpSha256 = $YtDlpSha256X86_64
 }
 
 $CamoufoxUrl = "https://github.com/daijro/camoufox/releases/download/v$CamoufoxVersion-$CamoufoxRelease/camoufox-$CamoufoxVersion-$CamoufoxRelease-lin.$CamoufoxArch.zip"
-$YtDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux$YtDlpSuffix"
+$YtDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/$YtDlpVersion/yt-dlp_linux$YtDlpSuffix"
 
 function Write-Step {
     param([string]$Message)
@@ -91,6 +96,11 @@ function Invoke-Fetch {
         Write-Step "Downloading yt-dlp ($Arch)..."
         Write-Host "  URL: $YtDlpUrl"
         curl.exe -L -o $YtDlpBin $YtDlpUrl
+        $actualHash = (Get-FileHash -Algorithm SHA256 -Path $YtDlpBin).Hash.ToLowerInvariant()
+        if ($actualHash -ne $YtDlpSha256) {
+            Remove-Item -Force $YtDlpBin
+            throw "yt-dlp SHA-256 mismatch: expected $YtDlpSha256, got $actualHash"
+        }
         Write-Host "  Downloaded: $(Get-Item $YtDlpBin | Select-Object -ExpandProperty Length) bytes"
     } else {
         Write-Host "  [SKIP] yt-dlp already downloaded"
@@ -105,6 +115,8 @@ function Invoke-Build {
         --build-arg "ARCH=$Arch" `
         --build-arg "CAMOUFOX_VERSION=$CamoufoxVersion" `
         --build-arg "CAMOUFOX_RELEASE=$CamoufoxRelease" `
+        --build-arg "YTDLP_VERSION=$YtDlpVersion" `
+        --build-arg "YTDLP_SHA256=$YtDlpSha256" `
         -t $ImageTag `
         -f (Join-Path $ProjectRoot 'Dockerfile') `
         $ProjectRoot
