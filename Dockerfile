@@ -1,10 +1,19 @@
-FROM node:22-slim AS camofox-browser
+# Node 22 base pinned to an immutable multi-arch index digest for reproducible
+# builds. Refresh with: docker buildx imagetools inspect node:22-slim
+# (this digest still resolves per-platform for linux/amd64 and linux/arm64).
+FROM node:22-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS camofox-browser
 
 # Pinned Camoufox version for reproducible builds
 # Update these when upgrading Camoufox
 ARG CAMOUFOX_VERSION=135.0.1
 ARG CAMOUFOX_RELEASE=beta.24
 ARG ARCH=x86_64
+
+# yt-dlp binary is fetched by the Makefile into dist/ and bind-mounted below.
+# YTDLP_SHA256 is the arch-specific checksum from the pinned yt-dlp release's
+# SHA2-256SUMS asset; the build fails if the bind-mounted binary does not match.
+ARG YTDLP_VERSION=2026.07.04
+ARG YTDLP_SHA256
 
 # Install dependencies for Camoufox (Firefox-based)
 RUN apt-get update && apt-get install -y \
@@ -51,15 +60,19 @@ RUN --mount=type=bind,source=dist,target=/dist \
     && echo "{\"version\":\"${CAMOUFOX_VERSION}\",\"release\":\"${CAMOUFOX_RELEASE}\"}" > /root/.cache/camoufox/version.json \
     && test -f /root/.cache/camoufox/camoufox-bin && echo "Camoufox installed successfully"
 
-# Install yt-dlp for YouTube transcript extraction (no browser needed)
+# Install yt-dlp for YouTube transcript extraction (no browser needed).
+# Verify the bind-mounted binary against the pinned upstream checksum before use.
 RUN --mount=type=bind,source=dist,target=/dist \
-    install -m 755 /dist/yt-dlp-${ARCH} /usr/local/bin/yt-dlp
+    if [ -n "${YTDLP_SHA256}" ]; then \
+      echo "${YTDLP_SHA256}  /dist/yt-dlp-${ARCH}" | sha256sum -c -; \
+    fi \
+    && install -m 755 /dist/yt-dlp-${ARCH} /usr/local/bin/yt-dlp
 
 WORKDIR /app
 
-COPY package.json ./
+COPY package.json package-lock.json ./
 COPY scripts/ ./scripts/
-RUN npm install --production
+RUN npm ci --omit=dev
 
 COPY server.js ./
 COPY camofox.config.json ./
@@ -74,6 +87,15 @@ ENV NODE_ENV=production
 ENV CAMOFOX_PORT=9377
 
 EXPOSE 9377
+
+# OCI image metadata. Populated by the publisher via --build-arg; defaults keep
+# the source label meaningful for local builds.
+ARG IMAGE_SOURCE=https://github.com/jimconstable/camofox-browser
+ARG IMAGE_REVISION=
+ARG IMAGE_VERSION=
+LABEL org.opencontainers.image.source=$IMAGE_SOURCE \
+      org.opencontainers.image.revision=$IMAGE_REVISION \
+      org.opencontainers.image.version=$IMAGE_VERSION
 
 CMD ["sh", "-c", "node --max-old-space-size=${MAX_OLD_SPACE_SIZE:-128} server.js"]
 

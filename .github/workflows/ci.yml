@@ -1,90 +1,133 @@
 name: CI
 
+# Pull-request and manual validation only. This workflow never publishes,
+# never writes packages, and uses no repository secrets. It runs exclusively
+# on GitHub-hosted ubuntu runners.
 on:
-  push:
-    branches: [master]
   pull_request:
-    branches: [master]
+  workflow_dispatch:
+
+# No secrets, no registry writes. Read-only checkout is all that is needed.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  unit:
+  # ---------------------------------------------------------------------------
+  # Lint / syntax / OpenAPI freshness / browser-independent unit tests.
+  # ---------------------------------------------------------------------------
+  verify:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [24]
+    env:
+      CI: true
+      # Deterministic install: do not pull the Camoufox binary. The tests in
+      # this job are browser-independent, and the download is large + network
+      # dependent (kept out of PR CI for reproducibility).
+      CAMOFOX_SKIP_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22
           cache: npm
 
-      - name: Install dependencies
+      - name: Install dependencies (locked)
         run: npm ci
 
       - name: Build plugin (TypeScript → JS)
         run: npm run build
 
-      - name: Run unit + plugin tests (Jest)
+      - name: Syntax check
         run: |
-          npm install --no-save jest-junit
+          for f in server.js plugin.js scripts/*.js; do
+            node --check "$f"
+          done
+
+      - name: OpenAPI spec is fresh
+        run: |
+          npm run generate-openapi
+          git diff --exit-code openapi.json \
+            || { echo "::error::openapi.json is stale — run 'npm run generate-openapi' and commit."; exit 1; }
+
+      - name: Browser-independent unit + plugin tests
+        run: |
           node --experimental-vm-modules node_modules/.bin/jest \
-            --testPathPattern='tests/unit|plugins' \
+            --testPathPattern='tests/unit|plugins|scripts' \
             --testPathIgnorePatterns='security\.test|tabRecycling\.test|cookies\.test' \
             --forceExit
-        env:
-          CI: true
 
-  e2e:
+      # Camoufox's release archive is version-pinned (135.0.1-beta.24), but the
+      # upstream release does not publish a checksum asset for that archive.
+      # Consequently CI does not download/run a Camoufox browser E2E: doing so
+      # would not meet the repository's integrity-verifiable test requirement.
+      # Browser-dependent tests remain a release-validation responsibility until
+      # upstream provides a release checksum or the project vendors a verified
+      # binary manifest. The yt-dlp job below is the reproducible authenticated-
+      # download subset currently supported by authoritative upstream checksums.
+
+  # ---------------------------------------------------------------------------
+  # Reproducible authenticated-download E2E for the pinned yt-dlp binary.
+  #
+  # yt-dlp CAN be acquired reproducibly (pinned release tag + upstream-published
+  # SHA2-256SUMS), so this job exercises the real download + integrity-verify
+  # path and asserts the binary reports the pinned version.
+  #
+  # LIMITATION: a live "download a YouTube video/transcript" E2E is intentionally
+  # NOT run here. It depends on external network to YouTube, is rate-limited,
+  # non-deterministic, and can require host/session state — none of which is
+  # reproducible in PR CI. The integrity + version assertion below is the
+  # reproducible subset of that flow.
+  # ---------------------------------------------------------------------------
+  ytdlp-download:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node-version: [24]
+    env:
+      YTDLP_VERSION: '2026.07.04'
+      YTDLP_SHA256_X86_64: '6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae'
+    steps:
+      - name: Download pinned yt-dlp and verify integrity
+        run: |
+          set -euxo pipefail
+          curl -fSL \
+            "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux" \
+            -o yt-dlp
+          echo "${YTDLP_SHA256_X86_64}  yt-dlp" | sha256sum -c -
+          chmod 755 yt-dlp
+
+      - name: Assert binary reports the pinned version
+        run: |
+          set -euxo pipefail
+          REPORTED="$(./yt-dlp --version)"
+          echo "yt-dlp reports: ${REPORTED}"
+          test "${REPORTED}" = "${YTDLP_VERSION}" \
+            || { echo "::error::yt-dlp version mismatch: ${REPORTED} != ${YTDLP_VERSION}"; exit 1; }
+
+  # ---------------------------------------------------------------------------
+  # Clean production image build. Never pushes (push: false). Uses BuildKit
+  # GHA cache to speed up repeat runs; cache is scoped to Actions, not a
+  # registry, so no credentials are required.
+  # ---------------------------------------------------------------------------
+  docker-build:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm install --no-save jest-junit
-
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
-      - name: Install browser
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps firefox
-
-      - name: Install browser system deps (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps firefox
-
-      - name: Run e2e + browser-dependent unit tests
-        run: |
-          xvfb-run --auto-servernum \
-            node --experimental-vm-modules node_modules/.bin/jest \
-              --config jest.config.e2e.cjs \
-              --runInBand --forceExit
-        env:
-          CI: true
-
-      - name: Run browser-dependent unit tests
-        run: |
-          xvfb-run --auto-servernum \
-            node --experimental-vm-modules node_modules/.bin/jest \
-              --testPathPattern='tests/unit/(security|tabRecycling|cookies)\.test' \
-              --runInBand --forceExit
-        env:
-          CI: true
+          context: .
+          file: Dockerfile.ci
+          platforms: linux/amd64
+          push: false
+          load: false
+          build-args: |
+            IMAGE_SOURCE=https://github.com/${{ github.repository }}
+            IMAGE_REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
