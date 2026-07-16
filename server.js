@@ -18,6 +18,7 @@ import {
   clearSessionDownloads,
   attachDownloadListener,
   getDownloadsList,
+  sanitizeFilename,
 } from './lib/downloads.js';
 import { extractPageImages } from './lib/images.js';
 import { extractDeterministic, validateSchema as validateExtractSchema } from './lib/extract.js';
@@ -952,7 +953,7 @@ async function launchBrowserInstance() {
     try {
       if (os.platform() === 'linux') {
         localVirtualDisplay = pluginCtx.createVirtualDisplay();
-        vdDisplay = localVirtualDisplay.get();
+        vdDisplay = await localVirtualDisplay.get();
         log('info', 'xvfb virtual display started', { display: vdDisplay, attempt });
       }
     } catch (err) {
@@ -4133,6 +4134,89 @@ app.get('/tabs/:tabId/downloads', async (req, res) => {
   }
 });
 
+/**
+ * @openapi
+ * /tabs/{tabId}/download:
+ *   post:
+ *     tags: [Content]
+ *     summary: Stream an authenticated same-origin resource from a tab
+ *     parameters:
+ *       - name: tabId
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [userId, url]
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               url:
+ *                 type: string
+ *                 format: uri
+ *     responses:
+ *       200:
+ *         description: Resource body streamed with its content type and filename.
+ *         content:
+ *           application/octet-stream:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       400:
+ *         description: Invalid or cross-origin resource URL.
+ *       404:
+ *         description: Tab not found.
+ */
+app.post('/tabs/:tabId/download', express.json({ limit: '16kb' }), async (req, res) => {
+  try {
+    const { userId, url } = req.body || {};
+    const session = sessions.get(normalizeUserId(userId));
+    const found = session && findTab(session, req.params.tabId);
+    if (!found) return tabNotFoundResponse(res, req.params.tabId);
+
+    const urlErr = validateUrl(url);
+    if (urlErr) return res.status(400).json({ error: urlErr });
+
+    const pageUrl = found.tabState.page.url();
+    const requestedUrl = new URL(url);
+    if (!pageUrl || requestedUrl.origin !== new URL(pageUrl).origin) {
+      return res.status(400).json({ error: 'Resource URL must have the same origin as the tab' });
+    }
+
+    session.lastAccess = Date.now();
+    found.tabState.toolCalls++;
+
+    const response = await found.tabState.page.context().request.get(url, {
+      maxRedirects: 10,
+      timeout: 90_000,
+    });
+    if (!response.ok()) {
+      return res.status(response.status()).json({ error: `Resource request failed: HTTP ${response.status()}` });
+    }
+
+    const headers = response.headers();
+    const body = await response.body();
+    const disposition = headers['content-disposition'] || '';
+    const match = /filename\*?=(?:UTF-8''|\")?([^;\"]+)/i.exec(disposition);
+    const fallback = requestedUrl.pathname.split('/').pop() || 'download.bin';
+    const filename = sanitizeFilename(decodeURIComponent((match?.[1] || fallback).replace(/^\"|\"$/g, '')));
+
+    res.setHeader('Content-Type', headers['content-type'] || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', String(body.length));
+    res.send(body);
+  } catch (err) {
+    failuresTotal.labels(classifyError(err), 'download_resource').inc();
+    log('error', 'authenticated resource download failed', { reqId: req.reqId, error: err.message });
+    res.status(500).json({ error: safeError(err) });
+  }
+});
+
 // Get image elements from current page
 /**
  * @openapi
@@ -5972,9 +6056,20 @@ setInterval(async () => {
     await testContext.close();
     healthState.lastSuccessfulNav = Date.now();
   } catch (err) {
+    if (testContext) await testContext.close().catch(() => {});
+    // Known Camoufox/Playwright CDP schema mismatch: newContext() sends a
+    // viewport.isMobile field that this Camoufox build's CDP implementation
+    // doesn't recognize on Browser.setDefaultViewport. It's a harmless
+    // protocol warning, not a hung browser -- treat it as a false positive
+    // instead of tearing down (and re-launching Xvfb/x11vnc) every probe
+    // interval, which drops any live VNC session.
+    if (/setDefaultViewport/.test(err.message) && /isMobile/.test(err.message)) {
+      log('info', 'health probe: ignoring known viewport schema mismatch', { error: err.message });
+      healthState.lastSuccessfulNav = Date.now();
+      return;
+    }
     failuresTotal.labels('health_probe', 'internal').inc();
     log('warn', 'health probe failed', { error: err.message, timeSinceSuccessMs: timeSinceSuccess });
-    if (testContext) await testContext.close().catch(() => {});
     restartBrowser('health probe failed').catch(() => {});
   }
 }, 60_000);

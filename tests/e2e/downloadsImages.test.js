@@ -34,6 +34,25 @@ describe('Downloads and Images', () => {
     }
   });
 
+  test('POST /tabs/:tabId/download returns an authenticated resource body', async () => {
+    const client = createClient(serverUrl);
+
+    try {
+      const { tabId } = await client.createTab(`${testSiteUrl}/download-page`);
+      const response = await fetch(`${serverUrl}/tabs/${tabId}/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: client.userId, url: `${testSiteUrl}/download-file` }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-disposition')).toContain('hello.txt');
+      expect(await response.text()).toBe('hello from camofox test download\n');
+    } finally {
+      await client.cleanup();
+    }
+  });
+
   test('GET /tabs/:tabId/downloads captures browser downloads', async () => {
     const client = createClient(serverUrl);
 

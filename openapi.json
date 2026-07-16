@@ -1545,6 +1545,66 @@
         }
       }
     },
+    "/tabs/{tabId}/download": {
+      "post": {
+        "tags": [
+          "Content"
+        ],
+        "summary": "Stream an authenticated same-origin resource from a tab",
+        "parameters": [
+          {
+            "name": "tabId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "userId",
+                  "url"
+                ],
+                "properties": {
+                  "userId": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resource body streamed with its content type and filename.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or cross-origin resource URL."
+          },
+          "404": {
+            "description": "Tab not found."
+          }
+        }
+      }
+    },
     "/tabs/{tabId}/images": {
       "get": {
         "tags": [
