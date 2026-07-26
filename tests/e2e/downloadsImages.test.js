@@ -53,6 +53,42 @@ describe('Downloads and Images', () => {
     }
   });
 
+  test('POST /tabs/:tabId/download follows same-origin redirects', async () => {
+    const client = createClient(serverUrl);
+
+    try {
+      const { tabId } = await client.createTab(`${testSiteUrl}/download-page`);
+      const response = await fetch(`${serverUrl}/tabs/${tabId}/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: client.userId, url: `${testSiteUrl}/download-redirect` }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('hello from camofox test download\n');
+    } finally {
+      await client.cleanup();
+    }
+  });
+
+  test('POST /tabs/:tabId/download rejects cross-origin redirects', async () => {
+    const client = createClient(serverUrl);
+
+    try {
+      const { tabId } = await client.createTab(`${testSiteUrl}/download-page`);
+      const response = await fetch(`${serverUrl}/tabs/${tabId}/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: client.userId, url: `${testSiteUrl}/download-cross-origin-redirect` }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'Resource redirects must remain on the tab origin' });
+    } finally {
+      await client.cleanup();
+    }
+  });
+
   test('GET /tabs/:tabId/downloads captures browser downloads', async () => {
     const client = createClient(serverUrl);
 
