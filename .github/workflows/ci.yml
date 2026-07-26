@@ -58,7 +58,7 @@ jobs:
         run: |
           node --experimental-vm-modules node_modules/.bin/jest \
             --testPathPattern='tests/unit|plugins|scripts' \
-            --testPathIgnorePatterns='security\.test|tabRecycling\.test|cookies\.test|tabLifecycleContract\.test' \
+            --testPathIgnorePatterns='security\.test|tabRecycling\.test|cookies\.test|tabLifecycleContract\.test|operationalFailures\.test' \
             --forceExit
 
       # Browser-backed contract and E2E tests run in the browser-tests job below,
@@ -74,7 +74,7 @@ jobs:
   # download entirely.
   #
   # Test coverage (no overlap with the verify job above):
-  #   browser-unit  tests/unit/{security,cookies,tabRecycling,tabLifecycleContract}
+  #   browser-unit  tests/unit/{security,cookies,tabRecycling,tabLifecycleContract,operationalFailures}
   #   e2e           tests/e2e/* (server lifecycle via jest.config.e2e.cjs globalSetup)
   # ---------------------------------------------------------------------------
   browser-tests:
@@ -165,11 +165,11 @@ jobs:
       # Browser-backed unit/contract tests. Each file manages its own server
       # lifecycle (beforeAll/afterAll), so --runInBand is required to prevent
       # concurrent browser instances on the same runner.
-      # These four tests are excluded from the verify job above.
+      # These five tests are excluded from the verify job above.
       - name: Browser-backed unit tests
         run: |
           node --experimental-vm-modules node_modules/.bin/jest \
-            --testPathPattern='tests/unit/(security|cookies|tabRecycling|tabLifecycleContract)\.test' \
+            --testPathPattern='tests/unit/(security|cookies|tabRecycling|tabLifecycleContract|operationalFailures)\.test' \
             --runInBand \
             --forceExit
 
