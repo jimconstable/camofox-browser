@@ -235,6 +235,14 @@ function createTestApp() {
     res.send(body);
   });
 
+  app.get('/download-redirect', (req, res) => {
+    res.redirect('/download-file');
+  });
+
+  app.get('/download-cross-origin-redirect', (req, res) => {
+    res.redirect('http://127.0.0.1:1/private');
+  });
+
   // Large page for snapshot truncation tests -- simulates a big product listing
   app.get('/large-page', (req, res) => {
     const count = parseInt(req.query.count) || 500;
