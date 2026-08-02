@@ -87,11 +87,15 @@ RUN npm ci --omit=dev --ignore-scripts
 COPY server.js ./
 COPY camofox.config.json ./
 COPY lib/ ./lib/
+COPY mcp/ ./mcp/
 COPY plugins/ ./plugins/
 COPY scripts/ ./scripts/
 
 # Install default plugin dependencies (apt packages + post-install hooks)
 RUN sh scripts/install-plugin-deps.sh
+
+# Validate that the MCP-backed cookie module used by core persistence resolves
+RUN node -e "import('./lib/cookies.js')"
 
 ENV NODE_ENV=production
 ENV CAMOFOX_PORT=9377
