@@ -76,7 +76,13 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY scripts/ ./scripts/
-RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --omit=dev
+# --ignore-scripts: the only prod packages with install scripts are this package
+# (its postinstall fetches Camoufox, already installed by curl above) and
+# better-sqlite3, which since 13.0.1 ships prebuilt binaries in prebuilds/ but
+# no longer declares an `install` script -- so npm falls back to `node-gyp
+# rebuild` and fails on this toolchain-free base image. Skipping scripts uses
+# the shipped prebuild and keeps the image free of a C++ build chain.
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --omit=dev --ignore-scripts
 
 COPY server.js ./
 COPY camofox.config.json ./
