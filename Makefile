@@ -42,11 +42,12 @@ YTDLP_URL    := https://github.com/yt-dlp/yt-dlp/releases/download/$(YTDLP_VERSI
 ## Build the Docker image for the current ARCH (default: x86_64)
 build: fetch
 	docker build --no-cache \
-	  --build-arg ARCH=$(ARCH) \
+	  --build-arg ARCH=$(CAMOUFOX_ARCH) \
 	  --build-arg CAMOUFOX_VERSION=$(VERSION) \
 	  --build-arg CAMOUFOX_RELEASE=$(RELEASE) \
 	  --build-arg YTDLP_VERSION=$(YTDLP_VERSION) \
 	  --build-arg YTDLP_SHA256=$(YTDLP_SHA256) \
+	  --build-arg YTDLP_DIST_ARCH=$(ARCH) \
 	  -t $(IMAGE) .
 
 ## Convenience targets

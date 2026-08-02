@@ -12,8 +12,14 @@ ARG ARCH=x86_64
 # yt-dlp binary is fetched by the Makefile into dist/ and bind-mounted below.
 # YTDLP_SHA256 is the arch-specific checksum from the pinned yt-dlp release's
 # SHA2-256SUMS asset; the build fails if the bind-mounted binary does not match.
+#
+# YTDLP_DIST_ARCH is the *host* arch token (x86_64 / aarch64) used to name the
+# file in dist/. It is deliberately separate from ARCH above, which carries the
+# *Camoufox release* token (x86_64 / arm64) used in the download URL -- the two
+# naming schemes diverge on 64-bit ARM.
 ARG YTDLP_VERSION=2026.07.04
 ARG YTDLP_SHA256
+ARG YTDLP_DIST_ARCH=x86_64
 
 # Install dependencies for Camoufox (Firefox-based)
 RUN apt-get update && apt-get install -y \
@@ -65,15 +71,18 @@ RUN mkdir -p /root/.cache/camoufox \
 # Verify the bind-mounted binary against the pinned upstream checksum before use.
 RUN --mount=type=bind,source=dist,target=/dist \
     if [ -n "${YTDLP_SHA256}" ]; then \
-      echo "${YTDLP_SHA256}  /dist/yt-dlp-${ARCH}" | sha256sum -c -; \
+      echo "${YTDLP_SHA256}  /dist/yt-dlp-${YTDLP_DIST_ARCH}" | sha256sum -c -; \
     fi \
-    && install -m 755 /dist/yt-dlp-${ARCH} /usr/local/bin/yt-dlp
+    && install -m 755 /dist/yt-dlp-${YTDLP_DIST_ARCH} /usr/local/bin/yt-dlp
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY scripts/ ./scripts/
-RUN npm ci --omit=dev
+# --ignore-scripts: Camoufox is already unpacked into the image above, and
+# better-sqlite3 >= 13.0.1 ships prebuilds but no `install` script, so npm would
+# otherwise fall back to `node-gyp rebuild` on a base image with no C++ chain.
+RUN npm ci --omit=dev --ignore-scripts
 
 COPY server.js ./
 COPY camofox.config.json ./

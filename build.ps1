@@ -112,11 +112,12 @@ function Invoke-Build {
 
     Write-Step "Building Docker image: $ImageTag"
     docker build `
-        --build-arg "ARCH=$Arch" `
+        --build-arg "ARCH=$CamoufoxArch" `
         --build-arg "CAMOUFOX_VERSION=$CamoufoxVersion" `
         --build-arg "CAMOUFOX_RELEASE=$CamoufoxRelease" `
         --build-arg "YTDLP_VERSION=$YtDlpVersion" `
         --build-arg "YTDLP_SHA256=$YtDlpSha256" `
+        --build-arg "YTDLP_DIST_ARCH=$Arch" `
         -t $ImageTag `
         -f (Join-Path $ProjectRoot 'Dockerfile') `
         $ProjectRoot

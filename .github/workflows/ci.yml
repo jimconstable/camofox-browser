@@ -54,10 +54,20 @@ jobs:
           git diff --exit-code openapi.json \
             || { echo "::error::openapi.json is stale — run 'npm run generate-openapi' and commit."; exit 1; }
 
+      # Standalone MCP adapter (mcp/) ships as its own package with its own
+      # lockfile, so it is verified and audited independently of the root tree.
+      - name: Verify standalone MCP package
+        run: npm run test:mcp
+
+      - name: Audit standalone MCP package
+        run: |
+          npm ci --prefix mcp --ignore-scripts
+          npm audit --prefix mcp --omit=dev
+
       - name: Browser-independent unit + plugin tests
         run: |
           node --experimental-vm-modules node_modules/.bin/jest \
-            --testPathPattern='tests/unit|plugins|scripts' \
+            --testPathPatterns='tests/unit|plugins|scripts' \
             --testPathIgnorePatterns='security\.test|tabRecycling\.test|cookies\.test|tabLifecycleContract\.test|operationalFailures\.test' \
             --forceExit
 
@@ -169,7 +179,7 @@ jobs:
       - name: Browser-backed unit tests
         run: |
           node --experimental-vm-modules node_modules/.bin/jest \
-            --testPathPattern='tests/unit/(security|cookies|tabRecycling|tabLifecycleContract|operationalFailures)\.test' \
+            --testPathPatterns='tests/unit/(security|cookies|tabRecycling|tabLifecycleContract|operationalFailures)\.test' \
             --runInBand \
             --forceExit
 
