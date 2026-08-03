@@ -87,6 +87,7 @@ RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --omit=dev --ignore-scripts
 COPY server.js ./
 COPY camofox.config.json ./
 COPY lib/ ./lib/
+COPY mcp/ ./mcp/
 COPY plugins/ ./plugins/
 COPY scripts/ ./scripts/
 
@@ -94,6 +95,9 @@ COPY scripts/ ./scripts/
 # Note: sh is used explicitly (./scripts/) because COPY from Windows
 # does not preserve +x permission bits in Docker build contexts.
 RUN sh scripts/install-plugin-deps.sh
+
+# Validate that the MCP-backed cookie module used by core persistence resolves
+RUN node -e "import('./lib/cookies.js')"
 
 ENV NODE_ENV=production
 ENV CAMOFOX_PORT=9377
