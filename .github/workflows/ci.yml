@@ -48,6 +48,17 @@ jobs:
             node --check "$f"
           done
 
+      # Standalone MCP adapter package (mcp/) is installed and contract-tested
+      # separately from the server: it has its own package-lock.json and is
+      # published as its own npm package.
+      - name: Verify standalone MCP package
+        run: npm run test:mcp
+
+      - name: Audit standalone MCP package
+        run: |
+          npm ci --prefix mcp --ignore-scripts
+          npm audit --prefix mcp --omit=dev
+
       - name: OpenAPI spec is fresh
         run: |
           npm run generate-openapi
@@ -57,7 +68,7 @@ jobs:
       - name: Browser-independent unit + plugin tests
         run: |
           node --experimental-vm-modules node_modules/.bin/jest \
-            --testPathPattern='tests/unit|plugins|scripts' \
+            --testPathPatterns='tests/unit|plugins|scripts' \
             --testPathIgnorePatterns='security\.test|tabRecycling\.test|cookies\.test|tabLifecycleContract\.test|operationalFailures\.test' \
             --forceExit
 
@@ -169,7 +180,7 @@ jobs:
       - name: Browser-backed unit tests
         run: |
           node --experimental-vm-modules node_modules/.bin/jest \
-            --testPathPattern='tests/unit/(security|cookies|tabRecycling|tabLifecycleContract|operationalFailures)\.test' \
+            --testPathPatterns='tests/unit/(security|cookies|tabRecycling|tabLifecycleContract|operationalFailures)\.test' \
             --runInBand \
             --forceExit
 

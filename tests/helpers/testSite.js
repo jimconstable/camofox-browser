@@ -36,6 +36,22 @@ function createTestApp() {
     `);
   });
   
+  // Page that fires a client-side redirect shortly after DOMContentLoaded
+  app.get('/lateRedirect', (req, res) => {
+    res.send(`
+      <!DOCTYPE html>
+      <html><head><title>Late Redirect</title></head>
+      <body>
+        <h1>Redirecting soon</h1>
+        <script>setTimeout(() => { location.href = '/pageA'; }, 300);</script>
+      </body></html>
+    `);
+  });
+
+  app.get('/connection-reset', (req, res) => {
+    req.socket.destroy();
+  });
+
   // Page with multiple links for links extraction test
   app.get('/links', (req, res) => {
     res.send(`
@@ -216,6 +232,10 @@ function createTestApp() {
     `);
   });
 
+  app.get('/bare-image', (req, res) => {
+    res.type('png').send(Buffer.from(samplePngBase64, 'base64'));
+  });
+
   // Page and endpoint for download capture tests
   app.get('/download-page', (req, res) => {
     res.send(`
@@ -235,6 +255,8 @@ function createTestApp() {
     res.send(body);
   });
 
+  // Same-origin and cross-origin redirect targets for the authenticated
+  // resource-download endpoint (POST /tabs/:tabId/download).
   app.get('/download-redirect', (req, res) => {
     res.redirect('/download-file');
   });
@@ -243,7 +265,25 @@ function createTestApp() {
     res.redirect('http://127.0.0.1:1/private');
   });
 
-  // Large page for snapshot truncation tests -- simulates a big product listing
+  // Page with a direct file input for upload endpoint tests
+  app.get('/upload', (req, res) => {
+    res.send(`
+      <!DOCTYPE html>
+      <html><head><title>Upload Test</title></head>
+      <body>
+        <h1>Upload Test Page</h1>
+        <input type="file" id="fileInput" />
+        <output id="selected">No file selected</output>
+        <script>
+          document.getElementById('fileInput').addEventListener('change', (event) => {
+            const [file] = event.target.files;
+            document.getElementById('selected').textContent = file ? file.name : 'No file selected';
+          });
+        </script>
+      </body></html>
+    `);
+  });
+
   app.get('/large-page', (req, res) => {
     const count = parseInt(req.query.count) || 500;
     const items = Array.from({ length: count }, (_, i) =>

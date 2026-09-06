@@ -42,6 +42,25 @@ describe('loadConfig', () => {
     expect(loadConfig().camoufoxExecutablePath).toBe('/legacy/camoufox');
   });
 
+  test('configures and forwards the upload directory', () => {
+    process.env.CAMOFOX_UPLOADS_DIR = '/mounted/uploads';
+
+    const config = loadConfig();
+
+    expect(config.uploadsDir).toBe('/mounted/uploads');
+    expect(config.serverEnv.CAMOFOX_UPLOADS_DIR).toBe('/mounted/uploads');
+  });
+
+  test('configures and forwards the evaluate body size limit', () => {
+    delete process.env.CAMOFOX_EVALUATE_MAX_BODY_SIZE;
+    expect(loadConfig().evaluateMaxBodySize).toBe('1mb');
+
+    process.env.CAMOFOX_EVALUATE_MAX_BODY_SIZE = '10mb';
+    const config = loadConfig();
+    expect(config.evaluateMaxBodySize).toBe('10mb');
+    expect(config.serverEnv.CAMOFOX_EVALUATE_MAX_BODY_SIZE).toBe('10mb');
+  });
+
   test('configures browser RSS restart threshold', () => {
     delete process.env.BROWSER_RSS_RESTART_THRESHOLD_MB;
     expect(loadConfig().browserRssRestartThresholdMb).toBe(1500);
@@ -60,6 +79,27 @@ describe('loadConfig', () => {
     fs.writeFileSync(configPath, JSON.stringify({ newPageTimeoutMs: 0 }));
     expect(loadConfig({ configPath }).newPageTimeoutMs).toBe(10000);
 
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('enables desktop interactive mode from the environment and forwards it to server subprocesses', () => {
+    process.env.CAMOFOX_INTERACTIVE = 'desktop';
+
+    const config = loadConfig();
+
+    expect(config.interactiveMode).toBe('desktop');
+    expect(config.serverEnv.CAMOFOX_INTERACTIVE).toBe('desktop');
+  });
+
+  test('reads interactive mode from camofox.config.json and rejects invalid modes', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'camofox-config-'));
+    const configPath = path.join(dir, 'camofox.config.json');
+
+    fs.writeFileSync(configPath, JSON.stringify({ interactive: { mode: 'desktop' } }));
+    expect(loadConfig({ configPath }).interactiveMode).toBe('desktop');
+
+    fs.writeFileSync(configPath, JSON.stringify({ interactive: { mode: 'surprise' } }));
+    expect(loadConfig({ configPath }).interactiveMode).toBe('off');
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

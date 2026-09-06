@@ -45,6 +45,7 @@ This project wraps that engine in a REST API built for agents: accessibility sna
 - **Runs on Anything** - lazy browser launch + idle shutdown keeps memory at ~40MB when idle. Designed to share a box with the rest of your stack -- Raspberry Pi, $5 VPS, shared infra.
 - **Session Isolation** - separate cookies/storage per user
 - **Cookie Import** - inject Netscape-format cookie files for authenticated browsing
+- **File Upload** - attach files from a configured upload directory without a native OS dialog
 - **Proxy + GeoIP** - route traffic through residential proxies with automatic locale/timezone
 - **Structured Logging** - JSON log lines with request IDs for production observability
 - **YouTube Transcripts** - extract captions from any YouTube video via yt-dlp, no API key needed
@@ -694,11 +695,13 @@ Browser behavior can be tuned in `camofox.config.json`:
 | `CAMOFOX_API_KEY` | Enable cookie import endpoint (disabled if unset) | - |
 | `CAMOFOX_ADMIN_KEY` | Required for `POST /stop` | - |
 | `CAMOFOX_ACCESS_KEY` | If set, all routes (except `/health`, cookie import, and `/stop`) require `Authorization: Bearer <key>`. Lets you safely expose the server beyond loopback. | - |
+| `CAMOFOX_EVALUATE_MAX_BODY_SIZE` | Max JSON request body size for `POST /tabs/:tabId/evaluate`; other JSON routes remain limited to `100kb`. | `1mb` |
 | `CAMOUFOX_EXECUTABLE` | External Camoufox executable to use instead of downloading/launching the bundled cache. Must point to a Camoufox bundle with sibling resources. | - |
 | `CAMOUFOX_EXECUTABLE_PATH` | Compatibility alias for `CAMOUFOX_EXECUTABLE` | - |
 | `CAMOFOX_EXECUTABLE_PATH` | Compatibility alias for `CAMOUFOX_EXECUTABLE` | - |
 | `CAMOFOX_DISABLE_DEFAULT_ADDONS` | Set to `1`/`true` to skip downloading and launching the default uBlock Origin (UBO) addon. Useful for deployments where the addons.mozilla.org download is unreliable or unwanted (a failed download otherwise leaves a broken addon cache that blocks startup). | `0` |
 | `CAMOFOX_COOKIES_DIR` | Directory for cookie files | `~/.camofox/cookies` |
+| `CAMOFOX_UPLOADS_DIR` | Directory allowed for `POST /tabs/:tabId/upload` file attachments. Paths outside it, including symlink escapes, are rejected. | `~/.camofox/uploads` |
 | `CAMOFOX_PROFILE_DIR` | Directory for persisted session profiles | `~/.camofox/profiles` |
 | `CAMOFOX_TRACES_DIR` | Directory for session trace zips | `~/.camofox/traces` |
 | `CAMOFOX_TRACES_MAX_BYTES` | Max size per trace, removed on next startup if exceeded | `52428800` (50MB) |
@@ -707,6 +710,7 @@ Browser behavior can be tuned in `camofox.config.json`:
 | `MAX_TABS_PER_SESSION` | Max tabs per session | `10` |
 | `SESSION_TIMEOUT_MS` | Session inactivity timeout | `1800000` (30min) |
 | `BROWSER_IDLE_TIMEOUT_MS` | Kill browser when idle (0 = never) | `300000` (5min) |
+| `CAMOFOX_INTERACTIVE` | Interactive browser mode: `desktop` opens a real local Camoufox window; `off` keeps normal headless behavior | `off` |
 | `HANDLER_TIMEOUT_MS` | Max time for any handler | `30000` (30s) |
 | `MAX_CONCURRENT_PER_USER` | Concurrent request cap per user | `3` |
 | `MAX_OLD_SPACE_SIZE` | Node.js V8 heap limit (MB) | `128` |
@@ -728,6 +732,24 @@ Browser behavior can be tuned in `camofox.config.json`:
 | `ENABLE_VNC` | Enable VNC plugin for interactive browser access (`1`) | - |
 | `VNC_PASSWORD` | Password for VNC access (recommended in production) | - |
 | `NOVNC_PORT` | noVNC web UI port | `6080` |
+
+## Interactive desktop browser
+
+Camofox is headless by default. On a machine with a local graphical desktop, opt in to a visible Camoufox window:
+
+```bash
+CAMOFOX_INTERACTIVE=desktop npm start
+```
+
+Or set the same preference in `camofox.config.json` and restart the server:
+
+```json
+{
+  "interactive": { "mode": "desktop" }
+}
+```
+
+The environment variable overrides the file setting. Set `CAMOFOX_INTERACTIVE=off` to return to normal headless behavior. This mode is intended for a person using the same machine; it does not expose a remote browser-control service.
 
 ## Architecture
 
