@@ -111,6 +111,8 @@ function Invoke-Build {
     Invoke-Fetch
 
     Write-Step "Building Docker image: $ImageTag"
+    # ARCH carries the Camoufox release asset arch (x86_64/arm64); YTDLP_BIN_ARCH
+    # names the dist/ file, which uses the host arch (x86_64/aarch64).
     docker build `
         --build-arg "ARCH=$CamoufoxArch" `
         --build-arg "CAMOUFOX_VERSION=$CamoufoxVersion" `

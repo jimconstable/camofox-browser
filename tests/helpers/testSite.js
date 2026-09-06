@@ -48,6 +48,10 @@ function createTestApp() {
     `);
   });
 
+  app.get('/connection-reset', (req, res) => {
+    req.socket.destroy();
+  });
+
   // Page with multiple links for links extraction test
   app.get('/links', (req, res) => {
     res.send(`
@@ -228,6 +232,10 @@ function createTestApp() {
     `);
   });
 
+  app.get('/bare-image', (req, res) => {
+    res.type('png').send(Buffer.from(samplePngBase64, 'base64'));
+  });
+
   // Page and endpoint for download capture tests
   app.get('/download-page', (req, res) => {
     res.send(`
@@ -247,6 +255,8 @@ function createTestApp() {
     res.send(body);
   });
 
+  // Same-origin and cross-origin redirect targets for the authenticated
+  // resource-download endpoint (POST /tabs/:tabId/download).
   app.get('/download-redirect', (req, res) => {
     res.redirect('/download-file');
   });
@@ -274,7 +284,6 @@ function createTestApp() {
     `);
   });
 
-  // Large page for snapshot truncation tests -- simulates a big product listing
   app.get('/large-page', (req, res) => {
     const count = parseInt(req.query.count) || 500;
     const items = Array.from({ length: count }, (_, i) =>

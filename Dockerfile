@@ -1,7 +1,12 @@
-# Node 22 base pinned to an immutable multi-arch index digest for reproducible
-# builds. Refresh with: docker buildx imagetools inspect node:22-slim
-# (this digest still resolves per-platform for linux/amd64 and linux/arm64).
-FROM node:22-slim@sha256:6c74791e557ce11fc957704f6d4fe134a7bc8d6f5ca4403205b2966bd488f6b3 AS camofox-browser
+# Trixie (glibc 2.41), not bookworm (2.36): better-sqlite3 ships an arm64 prebuild
+# linked against GLIBC_2.38, so on bookworm it loads and then dies at runtime with
+# "version `GLIBC_2.38' not found" the first time a tab is opened. amd64 is
+# unaffected because that prebuild targets an older glibc.
+#
+# Pinned to an immutable multi-arch index digest for reproducible builds; the
+# digest still resolves per-platform for linux/amd64 and linux/arm64. Refresh
+# with: docker buildx imagetools inspect node:22-trixie-slim
+FROM node:22-trixie-slim@sha256:7b8a0c89c54499bee567618f96578e1a12a800f062fbdbfd1fb6a443fa6f6284 AS camofox-browser
 
 # Pinned Camoufox version for reproducible builds
 # Update these when upgrading Camoufox
@@ -40,7 +45,8 @@ RUN apt-get update && apt-get install -y \
     libxtst6 \
     # Mesa OpenGL/EGL for WebGL support (software rendering via llvmpipe)
     # Without these, Firefox cannot create WebGL contexts -- a major bot detection signal
-    libegl1-mesa \
+    # libegl1 -- named libegl1-mesa on bookworm, dropped in trixie
+    libegl1 \
     libgl1-mesa-dri \
     libgbm1 \
     # Xvfb virtual display -- runs Camoufox as if on a real desktop (better anti-detection)
@@ -59,8 +65,12 @@ RUN apt-get update && apt-get install -y \
 
 # Pre-bake Camoufox browser binary into image (downloaded at build time)
 # Note: unzip returns exit code 1 for warnings (Unicode filenames), so we use || true and verify
+# -f so a 404 fails here instead of writing "Not Found" into the .zip: without it the
+# build dies three commands later on "unzip: cannot find zipfile directory", which
+# points at the archive rather than at the URL that was actually wrong. Note the Linux
+# arm asset is named lin.arm64.zip -- pass --build-arg ARCH=arm64, not aarch64.
 RUN mkdir -p /root/.cache/camoufox \
-    && curl -L -o /tmp/camoufox.zip "https://github.com/daijro/camoufox/releases/download/v${CAMOUFOX_VERSION}-${CAMOUFOX_RELEASE}/camoufox-${CAMOUFOX_VERSION}-${CAMOUFOX_RELEASE}-lin.${ARCH}.zip" \
+    && curl -fL -o /tmp/camoufox.zip "https://github.com/daijro/camoufox/releases/download/v${CAMOUFOX_VERSION}-${CAMOUFOX_RELEASE}/camoufox-${CAMOUFOX_VERSION}-${CAMOUFOX_RELEASE}-lin.${ARCH}.zip" \
     && (unzip -q /tmp/camoufox.zip -d /root/.cache/camoufox || true) \
     && rm /tmp/camoufox.zip \
     && chmod -R 755 /root/.cache/camoufox \
@@ -80,13 +90,24 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY scripts/ ./scripts/
 # --ignore-scripts: Camoufox is already unpacked into the image above, and
-# better-sqlite3 >= 13.0.1 ships prebuilds but no `install` script, so npm would
-# otherwise fall back to `node-gyp rebuild` on a base image with no C++ chain.
+# better-sqlite3 >= 13.0.1 ships prebuildify prebuilds (prebuilds/linux-{x64,arm64}.node)
+# with no `install` script -- but it does ship binding.gyp, so npm's implicit
+# `node-gyp rebuild` would run and fail on node:*-slim with "not found: make".
+# Skipping scripts avoids the compile entirely and is why this image needs no C++
+# toolchain. (Upstream v1.14.0 fixes the same failure by installing and purging
+# build-essential in this layer; skipping the compile is cheaper and equivalent
+# here because the prebuild is what gets loaded either way. The glibc note at the
+# FROM line is a separate, still-required constraint on that prebuild.)
 RUN npm ci --omit=dev --ignore-scripts
 
 COPY server.js ./
 COPY camofox.config.json ./
 COPY lib/ ./lib/
+# lib/cookies.js is a compatibility re-export from ../mcp/lib/cookies.mjs, so mcp/
+# must ship even though the MCP server itself is not run here. Without it the
+# persistence plugin dies at load with ERR_MODULE_NOT_FOUND, the server starts
+# anyway, /health keeps reporting ok, and no profile is ever written -- i.e. the
+# container silently loses the durable-profile feature it exists to provide.
 COPY mcp/ ./mcp/
 COPY plugins/ ./plugins/
 COPY scripts/ ./scripts/

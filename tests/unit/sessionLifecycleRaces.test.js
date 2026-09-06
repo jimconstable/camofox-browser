@@ -148,7 +148,7 @@ describe('health probe vs intentional browser shutdown', () => {
 
   test('server.js pins the probed instance and aborts when it is gone', () => {
     expect(SERVER_SRC).toContain('const probeBrowser = browser;');
-    expect(SERVER_SRC).toContain('testContext = await probeBrowser.newContext();');
+    expect(SERVER_SRC).toContain('testContext = await probeBrowser.newContext(');
     expect(SERVER_SRC).toMatch(/if \(browser !== probeBrowser \|\| healthState\.isRecovering\) \{[\s\S]{0,200}?return;/);
     // The abort must precede the restart call in the same catch block.
     const catchBlock = SERVER_SRC.slice(
