@@ -48,9 +48,14 @@ jobs:
             node --check "$f"
           done
 
-      # Standalone MCP adapter package (mcp/) is installed and contract-tested
-      # separately from the server: it has its own package-lock.json and is
-      # published as its own npm package.
+      - name: OpenAPI spec is fresh
+        run: |
+          npm run generate-openapi
+          git diff --exit-code openapi.json \
+            || { echo "::error::openapi.json is stale — run 'npm run generate-openapi' and commit."; exit 1; }
+
+      # Standalone MCP adapter (mcp/) ships as its own package with its own
+      # lockfile, so it is verified and audited independently of the root tree.
       - name: Verify standalone MCP package
         run: npm run test:mcp
 
@@ -58,12 +63,6 @@ jobs:
         run: |
           npm ci --prefix mcp --ignore-scripts
           npm audit --prefix mcp --omit=dev
-
-      - name: OpenAPI spec is fresh
-        run: |
-          npm run generate-openapi
-          git diff --exit-code openapi.json \
-            || { echo "::error::openapi.json is stale — run 'npm run generate-openapi' and commit."; exit 1; }
 
       - name: Browser-independent unit + plugin tests
         run: |

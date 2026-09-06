@@ -1373,8 +1373,22 @@ async function getSession(userId, { trace = false } = {}) {
       }
 
       const created = { context, tabGroups: new Map(), pageLeases: new Set(), lastAccess: Date.now(), proxySessionId: sessionProxy?.sessionId || null, tracePath };
+      // Publishing the session into `sessions` before the `session:created`
+      // listeners settle exposes a session with zero tab groups and no page
+      // leases. The reapers (tab reaper, pressure cleanup, Fly eviction) close
+      // exactly that shape, and the listeners do real I/O -- the persistence
+      // plugin reads persisted storage state and imports bootstrap cookies --
+      // so the await is a genuine scheduling window, not a microtask hop.
+      // The caller's own lease is only taken after getSession() returns, so
+      // hold a bootstrap lease across the gap using the same primitive the
+      // reapers already honor for an in-flight context.newPage().
+      const bootstrapLease = acquirePageLease(created);
       sessions.set(key, created);
-      await pluginEvents.emitAsync('session:created', { userId: key, context });
+      try {
+        await pluginEvents.emitAsync('session:created', { userId: key, context });
+      } finally {
+        releasePageLease(created, bootstrapLease);
+      }
       log('info', 'session created', {
         userId: key,
         proxyMode: proxyPool?.mode || null,
@@ -6625,18 +6639,33 @@ setInterval(async () => {
     log('warn', 'health probe forced despite active ops', { activeOps: healthState.activeOps, timeSinceSuccessMs: timeSinceSuccess });
   }
   
+  // Pin the instance this probe is testing. Idle shutdown / admin stop null
+  // `browser` out from under an in-flight probe, and a restart replaces it.
+  const probeBrowser = browser;
   let testContext;
   try {
-    testContext = await browser.newContext({ viewport: null });
+    testContext = await probeBrowser.newContext({ viewport: null });
     const page = await testContext.newPage();
     await page.goto('about:blank', { timeout: 5000 });
     await page.close();
     await testContext.close();
     healthState.lastSuccessfulNav = Date.now();
   } catch (err) {
+    if (testContext) await testContext.close().catch(() => {});
+    // The browser was intentionally closed or replaced while this probe was in
+    // flight. The probe only runs once ~120s have passed with no successful
+    // operation, which is squarely inside the 300s idle-shutdown window, so
+    // this collision is routine rather than exotic. The failure is a
+    // consequence of that teardown, not evidence of a hung browser -- calling
+    // restartBrowser() here would immediately relaunch the browser (and, on
+    // this runtime, cycle Xvfb/x11vnc and drop a live VNC session) right after
+    // an intentional idle shutdown.
+    if (browser !== probeBrowser || healthState.isRecovering) {
+      log('info', 'health probe aborted, browser closed or replaced mid-probe', { error: err.message });
+      return;
+    }
     failuresTotal.labels('health_probe', 'internal').inc();
     log('warn', 'health probe failed', { error: err.message, timeSinceSuccessMs: timeSinceSuccess });
-    if (testContext) await testContext.close().catch(() => {});
     restartBrowser('health probe failed').catch(() => {});
   }
 }, 60_000);

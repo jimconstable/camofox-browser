@@ -17,12 +17,14 @@ ARG ARCH=x86_64
 # yt-dlp binary is fetched by the Makefile into dist/ and bind-mounted below.
 # YTDLP_SHA256 is the arch-specific checksum from the pinned yt-dlp release's
 # SHA2-256SUMS asset; the build fails if the bind-mounted binary does not match.
-# YTDLP_BIN_ARCH names the dist/ file (host arch: x86_64 / aarch64). It is
-# deliberately separate from ARCH, which carries the Camoufox release asset arch
-# (x86_64 / arm64) -- the two differ on 64-bit ARM.
+#
+# YTDLP_DIST_ARCH is the *host* arch token (x86_64 / aarch64) used to name the
+# file in dist/. It is deliberately separate from ARCH above, which carries the
+# *Camoufox release* token (x86_64 / arm64) used in the download URL -- the two
+# naming schemes diverge on 64-bit ARM.
 ARG YTDLP_VERSION=2026.07.04
 ARG YTDLP_SHA256
-ARG YTDLP_BIN_ARCH=x86_64
+ARG YTDLP_DIST_ARCH=x86_64
 
 # Install dependencies for Camoufox (Firefox-based)
 RUN apt-get update && apt-get install -y \
@@ -79,24 +81,24 @@ RUN mkdir -p /root/.cache/camoufox \
 # Verify the bind-mounted binary against the pinned upstream checksum before use.
 RUN --mount=type=bind,source=dist,target=/dist \
     if [ -n "${YTDLP_SHA256}" ]; then \
-      echo "${YTDLP_SHA256}  /dist/yt-dlp-${YTDLP_BIN_ARCH}" | sha256sum -c -; \
+      echo "${YTDLP_SHA256}  /dist/yt-dlp-${YTDLP_DIST_ARCH}" | sha256sum -c -; \
     fi \
-    && install -m 755 /dist/yt-dlp-${YTDLP_BIN_ARCH} /usr/local/bin/yt-dlp
+    && install -m 755 /dist/yt-dlp-${YTDLP_DIST_ARCH} /usr/local/bin/yt-dlp
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY scripts/ ./scripts/
-# better-sqlite3 has no prebuild matching this node/arch, so npm ci falls back to
-# `node-gyp rebuild`, which fails on node:*-slim with "Error: not found: make".
-# Install a toolchain for the build and purge it in the same layer so it does not
-# land in the image. Independent of the glibc issue noted at the FROM line: this
-# one fails at build time on any Debian release, that one at runtime on bookworm.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential python3 \
-    && npm ci --omit=dev \
-    && apt-get purge -y --auto-remove build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# --ignore-scripts: Camoufox is already unpacked into the image above, and
+# better-sqlite3 >= 13.0.1 ships prebuildify prebuilds (prebuilds/linux-{x64,arm64}.node)
+# with no `install` script -- but it does ship binding.gyp, so npm's implicit
+# `node-gyp rebuild` would run and fail on node:*-slim with "not found: make".
+# Skipping scripts avoids the compile entirely and is why this image needs no C++
+# toolchain. (Upstream v1.14.0 fixes the same failure by installing and purging
+# build-essential in this layer; skipping the compile is cheaper and equivalent
+# here because the prebuild is what gets loaded either way. The glibc note at the
+# FROM line is a separate, still-required constraint on that prebuild.)
+RUN npm ci --omit=dev --ignore-scripts
 
 COPY server.js ./
 COPY camofox.config.json ./
@@ -112,6 +114,9 @@ COPY scripts/ ./scripts/
 
 # Install default plugin dependencies (apt packages + post-install hooks)
 RUN sh scripts/install-plugin-deps.sh
+
+# Validate that the MCP-backed cookie module used by core persistence resolves
+RUN node -e "import('./lib/cookies.js')"
 
 ENV NODE_ENV=production
 ENV CAMOFOX_PORT=9377

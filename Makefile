@@ -47,7 +47,7 @@ build: fetch
 	  --build-arg CAMOUFOX_RELEASE=$(RELEASE) \
 	  --build-arg YTDLP_VERSION=$(YTDLP_VERSION) \
 	  --build-arg YTDLP_SHA256=$(YTDLP_SHA256) \
-	  --build-arg YTDLP_BIN_ARCH=$(ARCH) \
+	  --build-arg YTDLP_DIST_ARCH=$(ARCH) \
 	  -t $(IMAGE) .
 
 ## Convenience targets
