@@ -202,11 +202,39 @@ linux/arm64 build, and GitHub-hosted CI (nothing was pushed).
 
 ## Remaining fork diff vs upstream v1.17.0
 
-`git diff 389c996 HEAD` touches **28 files**: 25 from the merge commit `cdb59f1`, 2 guard tests, and this doc. Product code: `server.js` only (three
+`git diff 389c996 HEAD` touches **30 files**: 25 from the merge commit `cdb59f1`, 2 guard tests, this doc, and the
+2 MCP dependency files from the audit follow-up below. Product code: `server.js` only (three
 behaviours, rows 3–5). Everything else is tests for those behaviours, deployment
 (Dockerfiles, Makefile, build.ps1, workflows, README), the lock/`package.json` pins,
-the type shim, and docs. `plugin.ts`, `plugin.js`, `lib/`, `mcp/`, `plugins/`,
-`scripts/`, `AGENTS.md` and `openclaw.plugin.json` are byte-identical to upstream v1.17.0.
+the type shim, and docs. `plugin.ts`, `plugin.js`, `lib/`, `plugins/`,
+`scripts/`, `AGENTS.md` and `openclaw.plugin.json` are byte-identical to upstream v1.17.0;
+`mcp/` differs only in `package.json` `overrides.fast-uri` and `package-lock.json` (see below).
+
+## Follow-up: gated MCP audit (PR CI)
+
+The PR's CI `verify` job failed at **Audit standalone MCP package**
+(`npm ci --prefix mcp --ignore-scripts && npm audit --prefix mcp --omit=dev`). Unlike the
+root `npm audit` above, this step **is** gated. Pristine upstream v1.17.0 fails it too. Two
+moderate advisories were published after upstream's lock was cut:
+
+| Package | Path | Locked | Advisories | Fix |
+|---|---|---|---|---|
+| `fast-uri` | `@modelcontextprotocol/sdk → ajv@8.20.0` | 3.1.7 (upstream `overrides` exact pin) | GHSA-hrr3-gc8f-f4qj | Override pin bumped to **3.1.8** (same 3.x line; ajv needs `^3.0.1`) |
+| `ip-address` | `@modelcontextprotocol/sdk → express-rate-limit@8.6.0` | 10.5.0 | GHSA-rpw4-54j3-4h4q, -2vr4-cq9g-pvrc, -j6r3-76f7-8jcv, -h3mg-xc3c-68pw | **Lockfile-only** bump to **10.7.2**, within express-rate-limit's existing `^10.2.0` range (engines unchanged, `node >= 12`) |
+
+Made with `npm update --prefix mcp --package-lock-only --ignore-scripts fast-uri ip-address`
+after editing the override. The lock diff is exactly these two entries (version, resolved,
+integrity). The audit was not disabled and CI was not changed. No code changed, so no TDD
+cycle applied. Verified on Node 22.23.0 / npm 10.9.8:
+
+| Check | Before | After |
+|---|---|---|
+| Exact CI audit command | exit 1: 3 moderate (`fast-uri`, `ajv` via fast-uri, `ip-address`) | exit 0: `found 0 vulnerabilities` |
+| `npm run test:mcp` | all 11 tool contracts OK; packed smoke passed | same |
+| `mcp-contracts`, `syncVersion`, `deterministicBuildPins` | — | 3/3 suites, 45/45 tests |
+
+The root `package.json` still pins `fast-uri` to 3.1.7. That is upstream's value, and the
+root audit is informational and outside this failure, so it is left for upstream to move.
 
 ## Retirement realism and risks
 
@@ -232,5 +260,5 @@ be retired, because upstream deliberately floats both.
 5. Local host test runs use a cached Camoufox `152.0.4-beta.26`
    (camoufox-js 0.11.5 resolves the newest release rather than an exact pin); the image
    bakes `beta.28`. Same major line; the container canary exercises `beta.28`.
-6. **`npm audit`** (informational, not gated, not fixed): 5 findings (3 moderate, 2 high), identical to upstream v1.17.0; upstream's own `overrides` do not yet cover them.
+6. **Root `npm audit`** (informational, not gated, not fixed): 5 findings (3 moderate, 2 high), identical to upstream v1.17.0; upstream's own `overrides` do not yet cover them. The **gated** MCP audit is fixed (see "Follow-up: gated MCP audit"); it will need the same kind of pin bump whenever new advisories land against upstream's exact `overrides`.
 7. **First-launch addon egress** (see publisher section): a runtime network dependency plus the v1.15 10 s bound can wedge an egress-restricted container.
