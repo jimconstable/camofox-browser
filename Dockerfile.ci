@@ -1,5 +1,6 @@
-# CI/CD Dockerfile — downloads binaries during build (no bind mounts needed).
-# For local builds with pre-downloaded binaries, use the default Dockerfile + Makefile.
+# CI/CD Dockerfile — resolves the yt-dlp asset per TARGETARCH so a multi-arch
+# buildx run installs the right standalone binary. For local single-arch builds
+# use the default Dockerfile + Makefile.
 
 # Trixie (glibc 2.41) is required: the better-sqlite3 arm64 prebuild links against
 # GLIBC_2.38 and dies at runtime on bookworm. Pinned to an immutable multi-arch
@@ -7,16 +8,16 @@
 # docker buildx imagetools inspect node:22-trixie-slim
 FROM node:22-trixie-slim@sha256:7b8a0c89c54499bee567618f96578e1a12a800f062fbdbfd1fb6a443fa6f6284
 
-ARG CAMOUFOX_VERSION=135.0.1
-ARG CAMOUFOX_RELEASE=beta.24
+ARG CAMOUFOX_VERSION=152.0.4
+ARG CAMOUFOX_RELEASE=beta.28
 ARG TARGETARCH
-
 # yt-dlp pinned to a named upstream release (never "latest"). Checksums are the
 # per-arch lines from that release's SHA2-256SUMS asset; see README "Refreshing
-# deterministic build inputs".
-ARG YTDLP_VERSION=2026.07.04
-ARG YTDLP_SHA256_X86_64=6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae
-ARG YTDLP_SHA256_AARCH64=b6ce97646773070d7a7ffd6bbbdcaecb47c48483909c54c915bf08a7a9b5e0b1
+# deterministic build inputs". The install itself is done by the YouTube plugin
+# hook further down, which verifies the download before making it executable.
+ARG YT_DLP_VERSION=2026.08.19
+ARG YT_DLP_SHA256_AMD64=58162f9bfdc27458ea47bfcb311cf47028f17d8154a8bf7d689861d46399230a
+ARG YT_DLP_SHA256_ARM64=b16e4dab368a816cd05d477d698a605a6ae87ccee1c8ffd38fa21d7254141fcc
 
 # Install dependencies for Camoufox (Firefox-based)
 RUN apt-get update && apt-get install -y \
@@ -58,8 +59,8 @@ RUN apt-get update && apt-get install -y \
 # Download and install Camoufox
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) CAMOUFOX_ARCH="x86_64"; YTDLP_SUFFIX="";         YTDLP_SHA256="${YTDLP_SHA256_X86_64}" ;; \
-      arm64) CAMOUFOX_ARCH="arm64";  YTDLP_SUFFIX="_aarch64"; YTDLP_SHA256="${YTDLP_SHA256_AARCH64}" ;; \
+      amd64) CAMOUFOX_ARCH="x86_64" ;; \
+      arm64) CAMOUFOX_ARCH="arm64" ;; \
       *) echo "Unsupported arch: ${TARGETARCH}" && exit 1 ;; \
     esac; \
     mkdir -p /root/.cache/camoufox; \
@@ -69,11 +70,7 @@ RUN set -eux; \
     chmod -R 755 /root/.cache/camoufox; \
     echo "{\"version\":\"${CAMOUFOX_VERSION}\",\"release\":\"${CAMOUFOX_RELEASE}\"}" > /root/.cache/camoufox/version.json; \
     test -f /root/.cache/camoufox/camoufox-bin && echo "Camoufox installed successfully"; \
-    rm /tmp/camoufox.zip; \
-    curl -fSL "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp_linux${YTDLP_SUFFIX}" \
-      -o /usr/local/bin/yt-dlp; \
-    echo "${YTDLP_SHA256}  /usr/local/bin/yt-dlp" | sha256sum -c -; \
-    chmod 755 /usr/local/bin/yt-dlp
+    rm /tmp/camoufox.zip
 
 WORKDIR /app
 
@@ -96,10 +93,16 @@ COPY mcp/ ./mcp/
 COPY plugins/ ./plugins/
 COPY scripts/ ./scripts/
 
-# Install default plugin dependencies
+# Install default plugin dependencies. yt-dlp is pinned per target architecture
+# and verified by the YouTube plugin hook.
 # Note: sh is used explicitly (./scripts/) because COPY from Windows
 # does not preserve +x permission bits in Docker build contexts.
-RUN sh scripts/install-plugin-deps.sh
+RUN case "${TARGETARCH}" in \
+      amd64) export YT_DLP_ASSET=yt-dlp_linux YT_DLP_SHA256="${YT_DLP_SHA256_AMD64}" ;; \
+      arm64) export YT_DLP_ASSET=yt-dlp_linux_aarch64 YT_DLP_SHA256="${YT_DLP_SHA256_ARM64}" ;; \
+      *) echo "Unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    sh scripts/install-plugin-deps.sh
 
 # Validate that the MCP-backed cookie module used by core persistence resolves
 RUN node -e "import('./lib/cookies.js')"
