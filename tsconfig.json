@@ -8,5 +8,5 @@
     "noImplicitAny": false,
     "types": ["node"]
   },
-  "files": ["plugin.ts"]
+  "files": ["plugin.ts", "types/openclaw-plugin-sdk.d.ts"]
 }

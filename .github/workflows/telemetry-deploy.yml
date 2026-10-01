@@ -27,3 +27,14 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers/crash-reporter
+
+  # Gated on the upstream owner: this fork holds no AGENTHOOK_* secrets and the
+  # reusable workflow declares all three as required.
+  notify-agenthook:
+    needs: [deploy]
+    if: always() && github.repository_owner == 'jo-inc'
+    uses: ./.github/workflows/agenthook-notify.yml
+    with:
+      kind: deploy
+      results: ${{ toJson(needs) }}
+    secrets: inherit

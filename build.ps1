@@ -5,12 +5,12 @@
 
 .DESCRIPTION
     Provides the same targets as the Makefile for Windows users without make:
-      build   - Download Camoufox + yt-dlp, then build the Docker image.
+      build   - Build the Docker image (it downloads Camoufox + yt-dlp itself).
       up      - Build (if needed) and run the container.
       down    - Stop and remove the container.
       reset   - Full rebuild from scratch.
       clean   - Remove downloaded binaries.
-      fetch   - Download Camoufox + yt-dlp binaries only.
+      fetch   - Pre-stage the Camoufox archive in dist\ (local convenience).
 
 .PARAMETER Target
     The action to perform: build, up, down, reset, clean, fetch (default: build).
@@ -19,10 +19,10 @@
     Target architecture: x86_64 or aarch64 (default: x86_64).
 
 .PARAMETER CamoufoxVersion
-    Camoufox version (default: 135.0.1).
+    Camoufox version (default: 152.0.4; must track the Dockerfile ARG).
 
 .PARAMETER CamoufoxRelease
-    Camoufox release channel (default: beta.24).
+    Camoufox release channel (default: beta.28; must track the Dockerfile ARG).
 
 .PARAMETER ContainerName
     Docker container name (default: camofox-browser).
@@ -43,8 +43,8 @@ param(
     [ValidateSet('x86_64', 'aarch64')]
     [string]$Arch = 'x86_64',
 
-    [string]$CamoufoxVersion = '135.0.1',
-    [string]$CamoufoxRelease = 'beta.24',
+    [string]$CamoufoxVersion = '152.0.4',
+    [string]$CamoufoxRelease = 'beta.28',
     [string]$ContainerName = 'camofox-browser',
     [int]$HostPort = 9377
 )
@@ -53,26 +53,20 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSCommandPath
 $DistDir = Join-Path $ProjectRoot 'dist'
 $CamoufoxZip = Join-Path $DistDir "camoufox-$Arch.zip"
-$YtDlpBin = Join-Path $DistDir "yt-dlp-$Arch"
 $ImageTag = "camofox-browser:$CamoufoxVersion-$Arch"
 $ContainerPort = 9377
-$YtDlpVersion = '2026.07.04'
-$YtDlpSha256X86_64 = '6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae'
-$YtDlpSha256Aarch64 = 'b6ce97646773070d7a7ffd6bbbdcaecb47c48483909c54c915bf08a7a9b5e0b1'
 
-# Map architecture to upstream release filenames
+# yt-dlp is installed inside the image by plugins/youtube/post-install.sh, pinned
+# and integrity-verified there; nothing is bind-mounted from dist\ any more.
+
+# Map architecture to the upstream Camoufox release filename
 if ($Arch -eq 'aarch64') {
     $CamoufoxArch = 'arm64'
-    $YtDlpSuffix = '_aarch64'
-    $YtDlpSha256 = $YtDlpSha256Aarch64
 } else {
     $CamoufoxArch = 'x86_64'
-    $YtDlpSuffix = ''
-    $YtDlpSha256 = $YtDlpSha256X86_64
 }
 
 $CamoufoxUrl = "https://github.com/daijro/camoufox/releases/download/v$CamoufoxVersion-$CamoufoxRelease/camoufox-$CamoufoxVersion-$CamoufoxRelease-lin.$CamoufoxArch.zip"
-$YtDlpUrl = "https://github.com/yt-dlp/yt-dlp/releases/download/$YtDlpVersion/yt-dlp_linux$YtDlpSuffix"
 
 function Write-Step {
     param([string]$Message)
@@ -91,35 +85,16 @@ function Invoke-Fetch {
     } else {
         Write-Host "  [SKIP] Camoufox already downloaded"
     }
-
-    if (-not (Test-Path $YtDlpBin)) {
-        Write-Step "Downloading yt-dlp ($Arch)..."
-        Write-Host "  URL: $YtDlpUrl"
-        curl.exe -L -o $YtDlpBin $YtDlpUrl
-        $actualHash = (Get-FileHash -Algorithm SHA256 -Path $YtDlpBin).Hash.ToLowerInvariant()
-        if ($actualHash -ne $YtDlpSha256) {
-            Remove-Item -Force $YtDlpBin
-            throw "yt-dlp SHA-256 mismatch: expected $YtDlpSha256, got $actualHash"
-        }
-        Write-Host "  Downloaded: $(Get-Item $YtDlpBin | Select-Object -ExpandProperty Length) bytes"
-    } else {
-        Write-Host "  [SKIP] yt-dlp already downloaded"
-    }
 }
 
 function Invoke-Build {
-    Invoke-Fetch
-
     Write-Step "Building Docker image: $ImageTag"
-    # ARCH carries the Camoufox release asset arch (x86_64/arm64); YTDLP_BIN_ARCH
-    # names the dist/ file, which uses the host arch (x86_64/aarch64).
+    # ARCH carries the Camoufox release asset arch (x86_64/arm64). Nothing is
+    # bind-mounted: the build downloads Camoufox and yt-dlp itself.
     docker build `
         --build-arg "ARCH=$CamoufoxArch" `
         --build-arg "CAMOUFOX_VERSION=$CamoufoxVersion" `
         --build-arg "CAMOUFOX_RELEASE=$CamoufoxRelease" `
-        --build-arg "YTDLP_VERSION=$YtDlpVersion" `
-        --build-arg "YTDLP_SHA256=$YtDlpSha256" `
-        --build-arg "YTDLP_DIST_ARCH=$Arch" `
         -t $ImageTag `
         -f (Join-Path $ProjectRoot 'Dockerfile') `
         $ProjectRoot

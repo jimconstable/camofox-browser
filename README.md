@@ -19,6 +19,12 @@
 >
 > Built by the team behind <a href="https://askjo.ai?ref=camofox"><strong>jo, a personal AI agent</strong></a> that runs half on your Mac, half on a dedicated cloud machine just for you -- with zero maintenance needed. Available on macOS, Telegram, WhatsApp, and email. <a href="https://askjo.ai?ref=camofox">Try the beta free -></a>
 
+> <a href="https://x.com/pradeep24"><img src="pradeep-profile.png" alt="Pradeep Elankumaran" width="80" height="80" align="left" /></a>
+>
+> <a href="https://x.com/pradeep24"><strong>Pradeep Elankumaran (@pradeep24)</strong></a> — co-founder and technical CEO at Jo.
+>
+> <br clear="left" />
+
 <br/>
 
 ```bash
@@ -106,7 +112,11 @@ Default port is `9377`. See [Environment Variables](#environment-variables) for 
 
 ### Docker
 
-The included `Makefile` auto-detects your CPU architecture and pre-downloads Camoufox + yt-dlp binaries outside the Docker build, so rebuilds are fast (~30s vs ~3min).
+The included `Makefile` auto-detects your CPU architecture and passes the matching
+Camoufox release to the build. The image downloads Camoufox and yt-dlp itself --
+both pinned and, for yt-dlp, checksum-verified -- so `docker build .` also works
+standalone. `make fetch` stages the Camoufox archive in `dist/` as a local
+convenience only; nothing in the build reads it.
 
 ```bash
 # Build and start (auto-detects arch: aarch64 on M1/M2, x86_64 on Intel)
@@ -118,12 +128,12 @@ make down
 # Force a clean rebuild (e.g. after upgrading VERSION/RELEASE)
 make reset
 
-# Just download binaries (without building)
+# Just stage the Camoufox archive in dist/ (not required to build)
 make fetch
 
 # Override arch or version explicitly
 make up ARCH=x86_64
-make up VERSION=135.0.1 RELEASE=beta.24
+make up VERSION=152.0.4 RELEASE=beta.28
 ```
 
 #### Windows
@@ -143,7 +153,7 @@ On Windows, `make` is not available. Use the included `build.ps1` PowerShell scr
 # Force a clean rebuild
 .\build.ps1 reset
 
-# Download binaries only (without building)
+# Stage the Camoufox archive in dist\ (not required to build)
 .\build.ps1 fetch
 
 # Override architecture
@@ -159,11 +169,14 @@ On Windows, `make` is not available. Use the included `build.ps1` PowerShell scr
 > ```
 > This converts shell scripts to LF line endings. Future clones will handle this automatically thanks to `.gitattributes`.
 
-> **WARNING: Do not run `docker build` directly.** The Dockerfile uses bind mounts to pull pre-downloaded binaries from `dist/`. Always use `make up` (or `make fetch` then `make build`) -- it downloads the binaries first.
+> **Note:** `docker build .` works directly -- the build downloads Camoufox and
+> yt-dlp itself and nothing is bind-mounted from `dist/`. Using `make`/`build.ps1`
+> only adds the host-arch detection and the version build args.
 
 ### Fly.io
 
-For Fly.io or other remote CI, you'll need a Dockerfile that downloads binaries at build time instead of using bind mounts.
+For Fly.io or other remote CI, use `Dockerfile.ci`: it resolves the Camoufox and
+yt-dlp assets from `TARGETARCH`, which is what a multi-arch `buildx` run needs.
 
 ### Railway
 
@@ -214,10 +227,14 @@ Container builds are reproducible: all external build inputs are pinned.
 
 | Input | Pinned in | Value |
 | --- | --- | --- |
-| Node base image | `Dockerfile`, `Dockerfile.ci` | `node:22-slim@sha256:6c74791e…` (immutable multi-arch index digest) |
-| Camoufox | `Dockerfile*`, `Makefile` | `135.0.1` / `beta.24` |
-| Playwright | `package-lock.json` | `playwright-core` `1.58.1` |
-| yt-dlp | `Dockerfile*`, `Makefile`, `ci.yml` | release `2026.07.04`, integrity-verified against the upstream `SHA2-256SUMS` |
+| Node base image | `Dockerfile`, `Dockerfile.ci` | `node:22-trixie-slim@sha256:7b8a0c89…` (immutable multi-arch index digest) |
+| Camoufox | `Dockerfile*`, `Makefile`, `build.ps1` | `152.0.4` / `beta.28` |
+| Playwright | `package.json`, `package-lock.json` | `playwright-core` `1.58.1` (exact, not `^1.58.0`) |
+| yt-dlp | `Dockerfile*`, `plugins/youtube/post-install.sh`, `ci.yml` | release `2026.08.19`, integrity-verified against the upstream `SHA2-256SUMS` |
+
+`tests/unit/deterministicBuildPins.test.js` cross-checks these values across all
+of those files, because `Makefile` and `build.ps1` pass the Camoufox pin as a
+`--build-arg` and therefore silently override the Dockerfile defaults.
 
 Dependency installs in the image use a locked production install
 (`npm ci --omit=dev`) against the committed `package-lock.json`.
@@ -231,19 +248,24 @@ Dependency installs in the image use a locked production install
 
   ```bash
   curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/download/<TAG>/SHA2-256SUMS \
-    | grep -E 'yt-dlp_linux(_aarch64)?$'
+    | grep -E '  (yt-dlp|yt-dlp_linux|yt-dlp_linux_aarch64)$'
   ```
 
-  Update `YTDLP_VERSION` and the `YTDLP_SHA256*` values in `Makefile`,
-  `Dockerfile`, `Dockerfile.ci`, and the `ytdlp-download` job in
-  `.github/workflows/ci.yml`. The `yt-dlp_linux` checksum is x86_64;
-  `yt-dlp_linux_aarch64` is arm64.
+  The install itself happens in `plugins/youtube/post-install.sh`, which verifies
+  the download against `YT_DLP_SHA256` before `chmod`. Update `YT_DLP_VERSION`
+  and `YT_DLP_SHA256` there and in `Dockerfile` (which uses the default
+  arch-independent `yt-dlp` zipapp), plus `YT_DLP_SHA256_AMD64` /
+  `YT_DLP_SHA256_ARM64` in `Dockerfile.ci` (which installs the per-arch
+  standalone `yt-dlp_linux` builds) and the `ytdlp-download` job in
+  `.github/workflows/ci.yml`.
 
 - **Node base image** — resolve a fresh immutable digest and update the
-  `FROM node:22-slim@sha256:…` lines in both Dockerfiles:
+  `FROM node:22-trixie-slim@sha256:…` lines in both Dockerfiles. Trixie is
+  required, not bookworm: the `better-sqlite3` arm64 prebuild links against
+  `GLIBC_2.38`.
 
   ```bash
-  docker buildx imagetools inspect node:22-slim
+  docker buildx imagetools inspect node:22-trixie-slim
   ```
 
 ## Usage
@@ -446,7 +468,8 @@ When a proxy is configured:
 - All traffic routes through the proxy
 - Camoufox's GeoIP automatically sets `locale`, `timezone`, and `geolocation` to match the proxy's exit IP
 - Browser fingerprint (language, timezone, coordinates) is consistent with the proxy location
-- Without a proxy, defaults to `en-US`, `America/Los_Angeles`, San Francisco coordinates
+
+Without a proxy, Camofox does not claim a geolocation or infer one from the host IP. To use a fixed direct-session identity, set both `CAMOFOX_LOCALE` and `CAMOFOX_TIMEZONE`; otherwise Camoufox keeps its own identity defaults.
 
 ### Telemetry
 
@@ -661,7 +684,8 @@ Uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) when available (fast, no browser
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/sessions/:userId/cookies` | Add cookies to a user session (Playwright cookie objects) |
+| `GET` | `/tabs/:tabId/downloads` | List captured browser downloads and saved current-resource PDFs |
+| `POST` | `/tabs/:tabId/fetch-current-resource` | Save the current inline PDF with its browser-session authentication as a download artifact |
 | `GET` | `/sessions/:userId/storage_state` | Export persisted browser storage ([VNC plugin](plugins/vnc/)) |
 | `DELETE` | `/sessions/:userId/storage_state` | Reset the live session and delete its persisted browser storage ([persistence plugin](plugins/persistence/)) |
 
@@ -696,6 +720,8 @@ Browser behavior can be tuned in `camofox.config.json`:
 | `CAMOFOX_ADMIN_KEY` | Required for `POST /stop` | - |
 | `CAMOFOX_ACCESS_KEY` | If set, all routes (except `/health`, cookie import, and `/stop`) require `Authorization: Bearer <key>`. Lets you safely expose the server beyond loopback. | - |
 | `CAMOFOX_EVALUATE_MAX_BODY_SIZE` | Max JSON request body size for `POST /tabs/:tabId/evaluate`; other JSON routes remain limited to `100kb`. | `1mb` |
+| `CAMOFOX_LOCALE` | Locale for an explicitly configured direct-session identity. Must be set with `CAMOFOX_TIMEZONE`. | - |
+| `CAMOFOX_TIMEZONE` | IANA timezone for an explicitly configured direct-session identity. Must be set with `CAMOFOX_LOCALE`. | - |
 | `CAMOUFOX_EXECUTABLE` | External Camoufox executable to use instead of downloading/launching the bundled cache. Must point to a Camoufox bundle with sibling resources. | - |
 | `CAMOUFOX_EXECUTABLE_PATH` | Compatibility alias for `CAMOUFOX_EXECUTABLE` | - |
 | `CAMOFOX_EXECUTABLE_PATH` | Compatibility alias for `CAMOUFOX_EXECUTABLE` | - |
@@ -708,13 +734,14 @@ Browser behavior can be tuned in `camofox.config.json`:
 | `CAMOFOX_TRACES_TTL_HOURS` | Traces older than this are swept on startup | `24` |
 | `MAX_SESSIONS` | Max concurrent browser sessions | `50` |
 | `MAX_TABS_PER_SESSION` | Max tabs per session | `10` |
-| `SESSION_TIMEOUT_MS` | Session inactivity timeout | `1800000` (30min) |
+| `SESSION_TIMEOUT_MS` | Session inactivity timeout (0 = never) | `600000` (10min) |
 | `BROWSER_IDLE_TIMEOUT_MS` | Kill browser when idle (0 = never) | `300000` (5min) |
 | `CAMOFOX_INTERACTIVE` | Interactive browser mode: `desktop` opens a real local Camoufox window; `off` keeps normal headless behavior | `off` |
 | `HANDLER_TIMEOUT_MS` | Max time for any handler | `30000` (30s) |
 | `MAX_CONCURRENT_PER_USER` | Concurrent request cap per user | `3` |
 | `MAX_OLD_SPACE_SIZE` | Node.js V8 heap limit (MB) | `128` |
 | `PROXY_STRATEGY` | Proxy mode: `backconnect` (rotating sticky sessions) or blank (single endpoint) | - |
+| `PROXY_PROTOCOL` | Proxy protocol: `http`, `https`, `socks4`, or `socks5`. | `http` |
 | `PROXY_PROVIDER` | Provider name for session format (e.g. `decodo`) | `decodo` |
 | `PROXY_HOST` | Proxy hostname or IP (simple mode) | - |
 | `PROXY_PORT` | Proxy port (simple mode) | - |

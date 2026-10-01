@@ -10,21 +10,18 @@ FROM node:22-trixie-slim@sha256:7b8a0c89c54499bee567618f96578e1a12a800f062fbdbfd
 
 # Pinned Camoufox version for reproducible builds
 # Update these when upgrading Camoufox
-ARG CAMOUFOX_VERSION=135.0.1
-ARG CAMOUFOX_RELEASE=beta.24
+ARG CAMOUFOX_VERSION=152.0.4
+ARG CAMOUFOX_RELEASE=beta.28
 ARG ARCH=x86_64
 
-# yt-dlp binary is fetched by the Makefile into dist/ and bind-mounted below.
-# YTDLP_SHA256 is the arch-specific checksum from the pinned yt-dlp release's
-# SHA2-256SUMS asset; the build fails if the bind-mounted binary does not match.
-#
-# YTDLP_DIST_ARCH is the *host* arch token (x86_64 / aarch64) used to name the
-# file in dist/. It is deliberately separate from ARCH above, which carries the
-# *Camoufox release* token (x86_64 / arm64) used in the download URL -- the two
-# naming schemes diverge on 64-bit ARM.
-ARG YTDLP_VERSION=2026.07.04
-ARG YTDLP_SHA256
-ARG YTDLP_DIST_ARCH=x86_64
+# yt-dlp is pinned to a named upstream release (never "latest") and installed by
+# plugins/youtube/post-install.sh, which verifies the download against
+# YT_DLP_SHA256 before making it executable. These two ARGs are the pin; the
+# checksum is the line for YT_DLP_ASSET (default: the arch-independent `yt-dlp`
+# zipapp, which runs on the python3-minimal installed below) from that release's
+# SHA2-256SUMS asset. See README "Refreshing deterministic build inputs".
+ARG YT_DLP_VERSION=2026.08.19
+ARG YT_DLP_SHA256=1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6
 
 # Install dependencies for Camoufox (Firefox-based)
 RUN apt-get update && apt-get install -y \
@@ -77,13 +74,7 @@ RUN mkdir -p /root/.cache/camoufox \
     && echo "{\"version\":\"${CAMOUFOX_VERSION}\",\"release\":\"${CAMOUFOX_RELEASE}\"}" > /root/.cache/camoufox/version.json \
     && test -f /root/.cache/camoufox/camoufox-bin && echo "Camoufox installed successfully"
 
-# Install yt-dlp for YouTube transcript extraction (no browser needed).
-# Verify the bind-mounted binary against the pinned upstream checksum before use.
-RUN --mount=type=bind,source=dist,target=/dist \
-    if [ -n "${YTDLP_SHA256}" ]; then \
-      echo "${YTDLP_SHA256}  /dist/yt-dlp-${YTDLP_DIST_ARCH}" | sha256sum -c -; \
-    fi \
-    && install -m 755 /dist/yt-dlp-${YTDLP_DIST_ARCH} /usr/local/bin/yt-dlp
+# yt-dlp is installed and verified by the enabled YouTube plugin hook below.
 
 WORKDIR /app
 
@@ -112,7 +103,10 @@ COPY mcp/ ./mcp/
 COPY plugins/ ./plugins/
 COPY scripts/ ./scripts/
 
-# Install default plugin dependencies (apt packages + post-install hooks)
+# Install default plugin dependencies (apt packages + post-install hooks).
+# The YouTube hook reads YT_DLP_VERSION / YT_DLP_SHA256 from the build args
+# above (declared ARGs are visible to RUN as environment variables), so the
+# yt-dlp install is pinned and integrity-verified rather than "latest".
 RUN sh scripts/install-plugin-deps.sh
 
 # Validate that the MCP-backed cookie module used by core persistence resolves

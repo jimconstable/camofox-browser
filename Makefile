@@ -1,15 +1,13 @@
-VERSION  ?= 135.0.1
-RELEASE  ?= beta.24
+# Must track the CAMOUFOX_VERSION / CAMOUFOX_RELEASE defaults in Dockerfile and
+# Dockerfile.ci: these are passed as --build-arg and therefore override them, so
+# a stale value here silently bakes a browser that camoufox-js was not pinned to.
+VERSION  ?= 152.0.4
+RELEASE  ?= beta.28
 
-# yt-dlp is pinned to a named upstream release (never "latest") so the image
-# build is deterministic. Refresh procedure: pick a tag from
-# https://github.com/yt-dlp/yt-dlp/releases, then copy the matching lines from
-# that release's SHA2-256SUMS asset into YTDLP_SHA256_* below.
-#   yt-dlp_linux          -> YTDLP_SHA256_X86_64
-#   yt-dlp_linux_aarch64  -> YTDLP_SHA256_AARCH64
-YTDLP_VERSION        ?= 2026.07.04
-YTDLP_SHA256_X86_64  := 6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae
-YTDLP_SHA256_AARCH64 := b6ce97646773070d7a7ffd6bbbdcaecb47c48483909c54c915bf08a7a9b5e0b1
+# yt-dlp is no longer pre-fetched into dist/. It is installed inside the build by
+# plugins/youtube/post-install.sh, pinned to a named release and verified against
+# YT_DLP_SHA256; the pin lives in Dockerfile / Dockerfile.ci (see README
+# "Refreshing deterministic build inputs").
 
 # Auto-detect host architecture; map arm64 (macOS) → aarch64
 UNAME_ARCH := $(shell uname -m)
@@ -19,35 +17,28 @@ else
   ARCH ?= $(UNAME_ARCH)
 endif
 
-# Map ARCH to the platform suffixes used by upstream release filenames
+# Map ARCH to the platform suffix used by upstream Camoufox release filenames
 ifeq ($(ARCH),aarch64)
   CAMOUFOX_ARCH := arm64
-  YTDLP_ARCH    := _aarch64
-  YTDLP_SHA256  := $(YTDLP_SHA256_AARCH64)
 else
   CAMOUFOX_ARCH := x86_64
-  YTDLP_ARCH    :=
-  YTDLP_SHA256  := $(YTDLP_SHA256_X86_64)
 endif
 
 IMAGE        := camofox-browser:$(VERSION)-$(ARCH)
 CAMOUFOX_ZIP := dist/camoufox-$(ARCH).zip
-YTDLP_BIN    := dist/yt-dlp-$(ARCH)
 
 CAMOUFOX_URL := https://github.com/daijro/camoufox/releases/download/v$(VERSION)-$(RELEASE)/camoufox-$(VERSION)-$(RELEASE)-lin.$(CAMOUFOX_ARCH).zip
-YTDLP_URL    := https://github.com/yt-dlp/yt-dlp/releases/download/$(YTDLP_VERSION)/yt-dlp_linux$(YTDLP_ARCH)
 
 .PHONY: build build-arm64 build-x86 fetch fetch-arm64 fetch-x86 up down reset clean
 
-## Build the Docker image for the current ARCH (default: x86_64)
-build: fetch
+## Build the Docker image for the current ARCH (default: x86_64).
+## No `fetch` prerequisite: the build downloads Camoufox and yt-dlp itself, so
+## `docker build .` also works standalone now that nothing is bind-mounted.
+build:
 	docker build --no-cache \
 	  --build-arg ARCH=$(CAMOUFOX_ARCH) \
 	  --build-arg CAMOUFOX_VERSION=$(VERSION) \
 	  --build-arg CAMOUFOX_RELEASE=$(RELEASE) \
-	  --build-arg YTDLP_VERSION=$(YTDLP_VERSION) \
-	  --build-arg YTDLP_SHA256=$(YTDLP_SHA256) \
-	  --build-arg YTDLP_DIST_ARCH=$(ARCH) \
 	  -t $(IMAGE) .
 
 ## Convenience targets
@@ -57,8 +48,9 @@ build-arm64:
 build-x86:
 	$(MAKE) build ARCH=x86_64
 
-## Download both binaries into dist/ for the current ARCH
-fetch: $(CAMOUFOX_ZIP) $(YTDLP_BIN)
+## Pre-stage the Camoufox archive in dist/ for the current ARCH. The Docker build
+## downloads Camoufox itself, so this is a local convenience only.
+fetch: $(CAMOUFOX_ZIP)
 
 fetch-arm64:
 	$(MAKE) fetch ARCH=aarch64
@@ -69,11 +61,6 @@ fetch-x86:
 $(CAMOUFOX_ZIP):
 	mkdir -p dist
 	curl -fSL "$(CAMOUFOX_URL)" -o $@
-
-$(YTDLP_BIN):
-	mkdir -p dist
-	curl -fSL "$(YTDLP_URL)" -o $@
-	echo "$(YTDLP_SHA256)  $@" | sha256sum -c -
 
 up:
 	@if ! docker image inspect $(IMAGE) > /dev/null 2>&1; then \
