@@ -77,8 +77,8 @@ jobs:
   # ---------------------------------------------------------------------------
   # Browser-backed contract tests and E2E suite.
   #
-  # Provisions Camoufox via postinstall.js → npx camoufox-js fetch,
-  # using the exact camoufox-js release pinned in package-lock.json. The
+  # Provisions Camoufox via `npm run fetch-bin` (lib/camoufox-download.js),
+  # which selects the compatible BUNDLED_CAMOUFOX_RELEASE. The
   # binary is cached under ~/.cache/camoufox keyed on runner OS + lock-file
   # hash; on a cache hit postinstall.js detects version.json and skips the
   # download entirely.
@@ -158,12 +158,15 @@ jobs:
           CAMOFOX_SKIP_DOWNLOAD: '1'
         run: npm ci
 
-      # Fetch through the project's supported pinned camoufox-js dependency.
+      # Fetch through the project's compatible-release downloader
+      # (lib/camoufox-download.js, BUNDLED_CAMOUFOX_RELEASE), as upstream CI
+      # does. Bare `npx camoufox-js fetch` resolves the newest release, which
+      # upstream found incompatible (beta.34 rejects navigator.product).
       # A token avoids unauthenticated GitHub API rate-limit failures.
       - name: Fetch Camoufox binary
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: npx camoufox-js fetch
+        run: npm run fetch-bin
 
       - name: Assert Camoufox binary is present
         run: |
